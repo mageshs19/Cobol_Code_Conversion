@@ -1,7 +1,13 @@
 """
 Cursor generation rules.
-"""
 
+This file contains cursor authority rules and paragraph numbering rules.
+
+Rules belong in rules/, not patterns/.
+
+No regex patterns should be defined here.
+No parser, service, transformer, or generator logic should be placed here.
+"""
 
 CURSOR_AUTHORITY_RULES = [
     "Cursor names are derived from Sheet Mapping DB2 record/table names.",
@@ -9,7 +15,6 @@ CURSOR_AUTHORITY_RULES = [
     "Generated cursor OPEN, FETCH, and CLOSE paragraphs are placed near the end.",
     "SQL-ERROR paragraph is required when cursor code performs SQL error handling.",
 ]
-
 
 CURSOR_PARAGRAPH_NUMBERING = {
     1: {

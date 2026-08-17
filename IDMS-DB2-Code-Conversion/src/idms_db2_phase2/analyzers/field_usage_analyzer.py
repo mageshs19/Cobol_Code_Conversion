@@ -39,17 +39,19 @@ class FieldUsageAnalyzer:
     """
 
     QUALIFIED_REFERENCE_PATTERN = re.compile(
-        r"\b(?P<field>[A-Z][A-Z0-9-]*)\s+(?:OF|IN)\s+(?P<record>[A-Z][A-Z0-9-]*)\b",
+        r"\b(?P<field>[A-Z][A-Z0-9-]*)\s+(?:OF|IN)\s+"
+        r"(?P<record>[A-Z][A-Z0-9-]*)\b",
         flags=re.IGNORECASE,
     )
 
     DCLGEN_OF_PATTERN = re.compile(
-        r":?\s*(?P<field>[A-Z][A-Z0-9-]*)\s+OF\s+(?P<group>DCL[A-Z0-9-]+)",
+        r":?\s*(?P<field>[A-Z][A-Z0-9-]*)\s+OF\s+"
+        r"(?P<group>DCL[A-Z0-9-]+)",
         flags=re.IGNORECASE,
     )
 
     DCLGEN_DOT_PATTERN = re.compile(
-        r":\s*(?P<group>DCL[A-Z0-9-]+)\.(?P<field>[A-Z][A-Z0-9-]*)",
+        r":?\s*(?P<group>DCL[A-Z0-9-]+)\.(?P<field>[A-Z][A-Z0-9-]*)",
         flags=re.IGNORECASE,
     )
 
@@ -187,7 +189,7 @@ class FieldUsageAnalyzer:
             if record_name.startswith("DCL"):
                 continue
 
-            if record_name not in self.mapping_repository.records():
+            if record_name not in self._mapping_records():
                 continue
 
             usage = self._usage_for_record(result, record_name)
@@ -261,7 +263,7 @@ class FieldUsageAnalyzer:
             if record_name.startswith("DCL"):
                 continue
 
-            if record_name not in self.mapping_repository.records():
+            if record_name not in self._mapping_records():
                 continue
 
             usage = self._usage_for_record(result, record_name)
@@ -287,7 +289,7 @@ class FieldUsageAnalyzer:
             if record_name.startswith("DCL"):
                 continue
 
-            if record_name not in self.mapping_repository.records():
+            if record_name not in self._mapping_records():
                 continue
 
             usage = self._usage_for_record(result, record_name)
@@ -310,7 +312,7 @@ class FieldUsageAnalyzer:
     ) -> dict[str, str]:
         output: dict[str, str] = {}
 
-        for record in self.mapping_repository.records():
+        for record in self._mapping_records():
             normalized_record = NameNormalizer.normalize(record)
             table = self.table_name_resolver.table_for_record(normalized_record)
 
@@ -321,3 +323,15 @@ class FieldUsageAnalyzer:
             output[NameNormalizer.normalize(group)] = normalized_record
 
         return output
+
+    def _mapping_records(
+        self,
+    ) -> set[str]:
+        try:
+            return {
+                NameNormalizer.normalize(record)
+                for record in self.mapping_repository.records()
+                if NameNormalizer.normalize(record)
+            }
+        except Exception:
+            return set()

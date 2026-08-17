@@ -1,6 +1,19 @@
+"""
+Production validator.
+
+Performs production-focused validation for generated DB2 COBOL.
+
+It detects:
+- Missing required DB2 constructs.
+- Undefined TODO host variables.
+- Generated DB2 error markers.
+- Residual executable IDMS statements.
+- Residual IDMS declarative/control statements.
+- Generated DCLGEN host variables not found in uploaded DCLGEN metadata.
+"""
+
 from idms_db2_phase2.repositories.dclgen_repository import DclgenRepository
 from idms_db2_phase2.services.name_normalizer import NameNormalizer
-from patterns.db2_patterns import REQUIRED_DB2_TOKENS
 from patterns.sequence_patterns import strip_sequence_numbers
 from patterns.sql_patterns import HOST_REFERENCE_PATTERN
 from patterns.validation_patterns import (
@@ -12,22 +25,11 @@ from patterns.validation_patterns import (
     TODO_HOST_VARIABLE_PATTERN,
     UNABLE_TO_DECLARE_CURSOR_PATTERN,
 )
+from rules.db2_validation_rules import REQUIRED_DB2_TOKENS
 from rules.validation_rules import PRODUCTION_VALIDATION_MESSAGES
 
 
 class ProductionValidator:
-    """
-    Performs production-focused validation for generated DB2 COBOL.
-
-    It detects:
-    - Missing required DB2 constructs.
-    - Undefined TODO host variables.
-    - Generated DB2 error markers.
-    - Residual executable IDMS statements.
-    - Residual IDMS declarative/control statements.
-    - Generated DCLGEN host variables not found in uploaded DCLGEN metadata.
-    """
-
     def __init__(
         self,
         dclgen_repository: DclgenRepository,
@@ -165,7 +167,8 @@ class ProductionValidator:
 
         for host in missing_hosts:
             messages.append(
-                f"Production validation: generated host variable {host} was not found in uploaded DCLGEN columns."
+                f"Production validation: generated host variable {host} "
+                "was not found in uploaded DCLGEN columns."
             )
 
     def _generated_dclgen_host_references(
@@ -179,7 +182,7 @@ class ProductionValidator:
             field = NameNormalizer.to_cobol(match.group("field"))
 
             if group and field:
-                output.add(f"{group}.{field}")
+                output.add(f"{group} . {field}")
 
         return output
 

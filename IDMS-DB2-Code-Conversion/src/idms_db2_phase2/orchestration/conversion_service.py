@@ -1,8 +1,18 @@
 from idms_db2_phase2.analyzers.program_flow_analyzer import ProgramFlowAnalyzer
 from idms_db2_phase2.composers.cobol_formatter import CobolFormatter
+from idms_db2_phase2.composers.cursor_flow_composer import CursorFlowComposer
+from idms_db2_phase2.composers.cursor_order_cleanup_composer import (
+    CursorOrderCleanupComposer,
+)
+from idms_db2_phase2.composers.db2_date_comparison_composer import (
+    Db2DateComparisonComposer,
+)
 from idms_db2_phase2.composers.fixed_format_composer import FixedFormatComposer
 from idms_db2_phase2.composers.manual_layout_composer import ManualLayoutComposer
 from idms_db2_phase2.composers.manual_style_preserver import ManualStylePreserver
+from idms_db2_phase2.composers.sqlcode_wrapper_cleanup_composer import (
+    SqlcodeWrapperCleanupComposer,
+)
 from idms_db2_phase2.domain.models import ConversionInput, ConversionResult
 from idms_db2_phase2.generators.cursor_paragraph_generator import (
     CursorParagraphGenerator,
@@ -22,7 +32,9 @@ from idms_db2_phase2.resolvers.host_variable_resolver import HostVariableResolve
 from idms_db2_phase2.resolvers.record_context_resolver import RecordContextResolver
 from idms_db2_phase2.resolvers.table_name_resolver import TableNameResolver
 from idms_db2_phase2.transformers.cobol_transformer import CobolTransformer
-from idms_db2_phase2.transformers.field_reference_rewriter import FieldReferenceRewriter
+from idms_db2_phase2.transformers.field_reference_rewriter import (
+    FieldReferenceRewriter,
+)
 from idms_db2_phase2.transformers.idms_statement_transformer import (
     IdmsStatementTransformer,
 )
@@ -34,17 +46,7 @@ from idms_db2_phase2.validators.production_validator import ProductionValidator
 
 class ConversionService:
     """
-    Main IDMS COBOL to DB2 COBOL conversion orchestration service.
-
-    Rules:
-    - Original COBOL is the authority for business flow.
-    - Sheet Mapping is the authority for DB2 table and column names.
-    - DCLGEN is the authority for host variable names and DCLGEN group names.
-    - Final output must be fixed-format COBOL:
-      - Columns 1-6   : left sequence number
-      - Column 7      : indicator area
-      - Columns 8-72  : COBOL statement area
-      - Columns 73-80 : right sequence number
+    Orchestrates IDMS COBOL to DB2 COBOL conversion.
     """
 
     def convert(
@@ -54,35 +56,39 @@ class ConversionService:
         validation_messages: list[str] = []
 
         input_validator = InputValidator()
-        input_messages = input_validator.validate(conversion_input)
+        validation_messages.extend(
+            input_validator.validate(conversion_input)
+        )
 
-        if input_messages:
+        if validation_messages:
             return ConversionResult(
                 converted_cobol="",
-                validation_messages=input_messages,
+                validation_messages=self._unique_messages(validation_messages),
                 operations=[],
             )
 
         repositories = self._repositories(conversion_input)
         resolvers = self._resolvers(repositories)
-        generators = self._generators(
-            repositories=repositories,
-            resolvers=resolvers,
-        )
-        transformers = self._transformers(
-            repositories=repositories,
-            resolvers=resolvers,
-            generators=generators,
-        )
-        composers = self._composers()
 
         mapping_validator = MappingValidator(
             mapping_repository=repositories["mapping"],
             dclgen_repository=repositories["dclgen"],
             table_name_resolver=resolvers["table_name"],
         )
-
         validation_messages.extend(mapping_validator.validate())
+
+        generators = self._generators(
+            repositories=repositories,
+            resolvers=resolvers,
+        )
+
+        transformers = self._transformers(
+            repositories=repositories,
+            resolvers=resolvers,
+            generators=generators,
+        )
+
+        composers = self._composers()
 
         converted_cobol, transform_messages, operations = transformers[
             "cobol"
@@ -122,6 +128,10 @@ class ConversionService:
 
         validation_messages.extend(infrastructure_messages)
 
+        converted_cobol = composers["cursor_order_cleanup"].compose(
+            converted_cobol
+        )
+
         converted_cobol, cursor_messages = generators[
             "cursor_paragraph"
         ].apply(
@@ -130,6 +140,22 @@ class ConversionService:
         )
 
         validation_messages.extend(cursor_messages)
+
+        converted_cobol = composers["cursor_flow"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["sqlcode_cleanup"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["cursor_order_cleanup"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["date_compare"].compose(
+            converted_cobol
+        )
 
         converted_cobol, timestamp_messages = generators["timestamp"].apply(
             cobol_text=converted_cobol,
@@ -169,6 +195,26 @@ class ConversionService:
             converted_cobol
         )
 
+        converted_cobol = composers["cursor_flow"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["sqlcode_cleanup"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["cursor_order_cleanup"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["date_compare"].compose(
+            converted_cobol
+        )
+
+        converted_cobol = composers["fixed_format"].format(
+            converted_cobol
+        )
+
         production_validator = ProductionValidator(
             dclgen_repository=repositories["dclgen"],
         )
@@ -189,13 +235,13 @@ class ConversionService:
     ) -> dict[str, object]:
         return {
             "mapping": MappingRepository(
-                conversion_input.sheet_mapping_rows
+                conversion_input.sheet_mapping_rows,
             ),
             "dclgen": DclgenRepository(
-                conversion_input.dclgen_columns
+                conversion_input.dclgen_columns,
             ),
             "copybook": CopybookRepository(
-                conversion_input.copybook_fields
+                conversion_input.copybook_fields,
             ),
         }
 
@@ -318,6 +364,10 @@ class ConversionService:
     ) -> dict[str, object]:
         return {
             "formatter": CobolFormatter(),
+            "cursor_flow": CursorFlowComposer(),
+            "cursor_order_cleanup": CursorOrderCleanupComposer(),
+            "date_compare": Db2DateComparisonComposer(),
+            "sqlcode_cleanup": SqlcodeWrapperCleanupComposer(),
             "manual_layout": ManualLayoutComposer(),
             "style_preserver": ManualStylePreserver(),
             "fixed_format": FixedFormatComposer(),

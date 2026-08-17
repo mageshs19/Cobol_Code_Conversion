@@ -1,0 +1,97 @@
+Feedback Status Check
+Based on your latest generated output, many items from the original feedback are now fixed, but not all.
+
+Fixed Items
+Feedback Item	Status	Evidence
+COBOL statements extended to column 92 instead of 80	Fixed	Output is now 80-column style with right sequence at end.
+Ending sequence number started in wrong columns	Fixed	Right sequence appears in final 8 columns.
+Commented statements started in column 8 instead of column 7	Fixed	Comment lines now show 000030*..., * in column 7.
+CBL NOCMPR2, NOFLAGMIG to CBL ARITH(EXTEND)	Fixed	Output starts with CBL ARITH(EXTEND).
+PROGRAM-ID. VM4BD420. to VMDZ4420	Fixed	Output has PROGRAM-ID. VMDZ4420.
+DB2 and View includes	Fixed	SQLERRWS, SQLCA, DZBEFFTV, DZEVEFTV are included.
+Cursor WITH HOLD missing	Fixed	Both cursor declarations use CURSOR WITH HOLD FOR.
+DCLGEN initialization missing	Fixed	INITIALIZE DCLDZBEFFTV and INITIALIZE DCLDZEVEFTV are present.
+Cursor EOC validation in wrong paragraph	Fixed	Main flow performs 720-FETCH... UNTIL DZBEFFC1-EOC; child flow performs 820-FETCH... UNTIL DZEVEFC1-EOC.
+DB2 date comparison realignment missing	Fixed	Date helper block and conversion before comparison are present.
+Wrong field names like NR-ID-GOOD / CO-STATE-EVPRAN	Fixed	Output uses NR-IDGOOD-479EVEF and CO-STEVPRN-479EVEF.
+PERFORM SQL-ERROR / separate SQL-ERROR routine	Fixed	Output has SQLERROR. with EXEC SQL INCLUDE SQLERROR.
+Partially Fixed Items
+Feedback Item	Status	Notes
+Cursor SELECT has too many fields	Partially fixed	Current SELECT is reduced, but field order still differs from manual expectation.
+DZBEFFTV cursor ORDER BY unnecessary	Fixed / Not present	Current parent cursor has no ORDER BY.
+DZEVEFTV cursor ORDER BY should use sequence/order field	Mostly fixed	Current child cursor has ORDER BY NR_ID_479EVEF DESC.
+Procedure Division statements should start in Area B column 12	Mostly fixed	Many procedure statements are still shown with 000xxx  then body. Need exact column validation, but much improved.
+Still Not Fixed
+1. MOVE '0307' TO ERROR-STATUS
+Still present:
+
+cobol
+
+003330                    MOVE '0307' TO ERROR-STATUS                   03330000
+Feedback says this IDMS indirect statement must be converted.
+
+Manual expected logic appears to use a generated switch:
+
+cobol
+
+MOVE 'Y' TO SW-STATUS-D
+Status: Not fixed
+
+2. Necessary working-storage fields are still missing
+Manual expected fields like:
+
+cobol
+
+10  SW-STATUS-D              PIC X       VALUE 'N'.
+10  WS-NB-BEFF-COUNT         PIC 9(7)    COMP-3 VALUE ZEROES.
+10  WS-NB-OUTPUT-COUNT       PIC 9(7)    COMP-3 VALUE ZEROES.
+10  CS-PROGRAM               PIC X(8)    VALUE 'VMDZ4420'.
+Current output does not include these.
+
+Status: Not fixed
+
+3. Output still resembles old program business layout
+Feedback says:
+
+I could see all the data of VM4BD420 DB2 EQ even in VM1BD567 DB2 EQ, except the program id.
+
+This cannot be confirmed from the one output only, but it indicates the converter may be preserving too much program-specific content from the source. That may be acceptable for preservation, but not if the expectation is standardized manual rewrite.
+
+Status: Needs separate validation with VM1BD567 output
+
+Summary
+Fixed
+Most of the technical conversion and formatting issues are now fixed:
+
+Fixed columns
+Right sequence
+Comment column
+PROGRAM-ID
+DB2 includes
+Cursor declarations
+Cursor flow
+Date conversion
+SQLERROR include
+Not Fixed
+The remaining issues are business/manual-logic enhancements:
+
+Replace MOVE '0307' TO ERROR-STATUS
+Add required WS helper fields
+Add counters if required
+Possibly restructure output write logic into WRITE-UITRECORD
+Validate VM1BD567 does not incorrectly reuse VM4BD420-specific logic
+Next Recommended Fix
+Start with the highest-impact remaining item:
+
+text
+
+MOVE '0307' TO ERROR-STATUS
+Generic fix:
+
+Add generated switch field:
+SW-STATUS-D PIC X VALUE 'N'
+Replace:
+MOVE '0307' TO ERROR-STATUS
+With:
+MOVE 'Y' TO SW-STATUS-D
+This should be implemented generically, not hardcoded to one program.

@@ -5,11 +5,19 @@ from catalogs.output_sections import (
     DB2_CURSOR_FLAGS_MARKER,
     DB2_INFRASTRUCTURE_MARKER,
     DB2_SQL_ERROR_LOCATION_MARKER,
-    SQL_LOCATION_FIELD_NAME,
-    SQL_LOCATION_PICTURE,
     SQLCA_INCLUDE_NAME,
     SQLERRWS_INCLUDE_NAME,
 )
+
+try:
+    from catalogs.output_sections import (
+        SQL_LOCATION_FIELD_NAME,
+        SQL_LOCATION_PICTURE,
+    )
+except ImportError:
+    SQL_LOCATION_FIELD_NAME = "SQL-LOCATION"
+    SQL_LOCATION_PICTURE = "PIC X(40) VALUE SPACES."
+
 from idms_db2_phase2.analyzers.field_usage_analyzer import FieldUsageAnalyzer
 from idms_db2_phase2.domain.models import IdmsOperation
 from idms_db2_phase2.resolvers.column_name_resolver import ColumnNameResolver
@@ -29,7 +37,7 @@ class Db2InfrastructureGenerator:
     - Include SQLERRWS and SQLCA.
     - Include DCLGEN views/tables actually used by cursor specs.
     - Generate SQL-LOCATION.
-    - Generate cursor EOC flags.
+    - Generate cursor EOC flags using PIC X and 88-level values.
     - Generate cursor declarations using WITH HOLD.
     - Reduce SELECT columns using actual field usage and relationship keys.
     - Generate child cursor WHERE from FK mapping.
@@ -324,21 +332,9 @@ class Db2InfrastructureGenerator:
                 self._comment_block(DB2_CURSOR_FLAGS_MARKER)
             )
 
-            for spec in cursor_specs:
-                cursor_name = str(spec.get("cursor_name", ""))
-                flag_name = f"WS-{cursor_name}-FLAG"
-                not_eoc_name = f"{cursor_name}-NOT-EOC"
-                eoc_name = f"{cursor_name}-EOC"
-
-                lines.append(
-                    f"01  {flag_name:<30} PIC X VALUE 'N'."
-                )
-                lines.append(
-                    f"    88  {not_eoc_name:<26} VALUE 'N'."
-                )
-                lines.append(
-                    f"    88  {eoc_name:<26} VALUE 'Y'."
-                )
+            lines.extend(
+                self._cursor_flag_lines(cursor_specs)
+            )
 
             lines.append("")
             lines.extend(
@@ -353,11 +349,45 @@ class Db2InfrastructureGenerator:
 
         return "\n".join(lines).rstrip() + "\n"
 
+    def _cursor_flag_lines(
+        self,
+        cursor_specs: list[dict[str, object]],
+    ) -> list[str]:
+        lines: list[str] = []
+
+        for spec in cursor_specs:
+            cursor_name = NameNormalizer.to_cobol(
+                str(spec.get("cursor_name", ""))
+            )
+
+            if not cursor_name:
+                continue
+
+            flag_name = f"WS-{cursor_name}-FLAG"
+            not_eoc_name = f"{cursor_name}-NOT-EOC"
+            eoc_name = f"{cursor_name}-EOC"
+
+            lines.append(
+                f"01  {flag_name:<30} PIC X."
+            )
+            lines.append(
+                f"    88  {not_eoc_name:<26} VALUE 'N'."
+            )
+            lines.append(
+                f"    88  {eoc_name:<26} VALUE 'Y'."
+            )
+            lines.append("")
+
+        return lines
+
     def _cursor_declaration(
         self,
         spec: dict[str, object],
     ) -> list[str]:
-        cursor_name = str(spec.get("cursor_name", ""))
+        cursor_name = NameNormalizer.to_cobol(
+            str(spec.get("cursor_name", ""))
+        )
+
         table_name = NameNormalizer.normalize(
             str(spec.get("table_name", ""))
         )
@@ -439,8 +469,12 @@ class Db2InfrastructureGenerator:
         output: list[str] = []
 
         for condition in conditions or []:
-            child_column = NameNormalizer.normalize(condition.child_column)
-            parent_host = str(condition.parent_host_reference or "").strip()
+            child_column = NameNormalizer.normalize(
+                getattr(condition, "child_column", "")
+            )
+            parent_host = str(
+                getattr(condition, "parent_host_reference", "") or ""
+            ).strip()
 
             if not child_column or not parent_host:
                 continue
@@ -686,8 +720,10 @@ class Db2InfrastructureGenerator:
         output: list[str] = []
 
         for index, item in enumerate(clean_items):
-            suffix = "," if index < len(clean_items) - 1 else ""
-            output.append(f"{indent}{item}{suffix}")
+            if index == 0:
+                output.append(f"{indent}{item}")
+            else:
+                output.append(f"{indent}, {item}")
 
         return output
 

@@ -1,0 +1,53 @@
+"""
+Input validation service.
+
+This service performs input-level validation only.
+
+Production validation of converted COBOL output should remain in the
+production validator.
+"""
+
+from idms_db2_phase2.domain.models import ConversionInput
+from rules.validation_rules import INPUT_VALIDATION_MESSAGES
+
+
+class ValidationService:
+    """
+    Validates the minimum required conversion inputs.
+    """
+
+    def validate(
+        self,
+        conversion_input: ConversionInput,
+    ) -> list[str]:
+        """
+        Return input validation messages.
+
+        Required:
+        - Sheet Mapping rows
+        - DCLGEN columns
+        - IDMS COBOL source text
+        """
+
+        messages: list[str] = []
+
+        if conversion_input is None:
+            messages.extend(
+                [
+                    INPUT_VALIDATION_MESSAGES["missing_sheet_mapping"],
+                    INPUT_VALIDATION_MESSAGES["missing_dclgen"],
+                    INPUT_VALIDATION_MESSAGES["missing_idms_cobol"],
+                ]
+            )
+            return messages
+
+        if not conversion_input.sheet_mapping_rows:
+            messages.append(INPUT_VALIDATION_MESSAGES["missing_sheet_mapping"])
+
+        if not conversion_input.dclgen_columns:
+            messages.append(INPUT_VALIDATION_MESSAGES["missing_dclgen"])
+
+        if not str(conversion_input.idms_cobol_text or "").strip():
+            messages.append(INPUT_VALIDATION_MESSAGES["missing_idms_cobol"])
+
+        return messages
