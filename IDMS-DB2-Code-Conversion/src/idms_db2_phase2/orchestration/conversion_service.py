@@ -13,6 +13,9 @@ from idms_db2_phase2.composers.manual_style_preserver import ManualStylePreserve
 from idms_db2_phase2.composers.sqlcode_wrapper_cleanup_composer import (
     SqlcodeWrapperCleanupComposer,
 )
+from idms_db2_phase2.composers.update_restart_skip_composer import (
+    UpdateRestartSkipComposer,
+)
 from idms_db2_phase2.domain.models import ConversionInput, ConversionResult
 from idms_db2_phase2.generators.cursor_paragraph_generator import (
     CursorParagraphGenerator,
@@ -98,6 +101,14 @@ class ConversionService:
         )
 
         validation_messages.extend(transform_messages)
+
+        converted_cobol = composers["update_restart_skip"].compose(
+            converted_cobol
+        )
+
+        validation_messages.extend(
+            composers["update_restart_skip"].messages
+        )
 
         flow_analyzer = ProgramFlowAnalyzer(
             mapping_rows=conversion_input.sheet_mapping_rows,
@@ -371,6 +382,7 @@ class ConversionService:
             "manual_layout": ManualLayoutComposer(),
             "style_preserver": ManualStylePreserver(),
             "fixed_format": FixedFormatComposer(),
+            "update_restart_skip": UpdateRestartSkipComposer(),
         }
 
     def _unique_messages(

@@ -4,6 +4,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+CURRENT_FILE = Path(__file__).resolve()
+SRC_DIR = CURRENT_FILE.parents[2]
+PROJECT_ROOT = CURRENT_FILE.parents[3]
+
+for path in [PROJECT_ROOT, SRC_DIR]:
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
 from config.path_settings import (
     DEFAULT_COPYBOOK_CANDIDATE_PATHS,
     DEFAULT_DCLGEN_CANDIDATE_PATHS,
@@ -24,28 +32,18 @@ from idms_db2_phase2.parsers.dclgen_parser import DclgenParser
 from idms_db2_phase2.parsers.sheet_mapping_parser import SheetMappingParser
 
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-
 TARGET_PROGRAM_ID = "VMDZ1567"
 AUTO_FIX_PIC_LENGTH_MISMATCHES = False
-
 
 SHEET_MAPPING_PATH = DEFAULT_SHEET_MAPPING_PATH
 IDMS_COBOL_SOURCE_PATH = DEFAULT_UPDATE_SOURCE_PATH
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
-
 
 DCLGEN_PATHS = [
     path
     for path in DEFAULT_DCLGEN_CANDIDATE_PATHS
     if path.exists() and path.is_file()
 ]
-
 
 COPYBOOK_PATHS = [
     path
@@ -70,7 +68,10 @@ def validate_inputs() -> None:
     validate_file_exists(IDMS_COBOL_SOURCE_PATH, "IDMS COBOL Source")
 
     if not DCLGEN_PATHS:
-        searched = "\n".join(str(path) for path in DEFAULT_DCLGEN_CANDIDATE_PATHS)
+        searched = "\n".join(
+            str(path)
+            for path in DEFAULT_DCLGEN_CANDIDATE_PATHS
+        )
         raise ValueError(
             "At least one DCLGEN file path is required. "
             "No DCLGEN candidate file was found. Searched:\n"
@@ -104,53 +105,88 @@ def load_inputs(
 
     sheet_file = LocalUploadedFile(SHEET_MAPPING_PATH)
     sheet_rows = sheet_parser.parse_uploaded_file(sheet_file)
-    diagnostics.append(f"Sheet Mapping file: {SHEET_MAPPING_PATH}")
-    diagnostics.append(f"Sheet Mapping parsed rows: {len(sheet_rows)}")
-    diagnostics.extend(sheet_parser.diagnostics)
 
-    logger.info("Sheet Mapping parsed rows: %s", len(sheet_rows))
+    diagnostics.append(f"Sheet Mapping file: {SHEET_MAPPING_PATH}")
+    diagnostics.append(f"Sheet Mapping rows: {len(sheet_rows)}")
+    logger.info("Sheet Mapping file: %s", SHEET_MAPPING_PATH)
+    logger.info("Sheet Mapping rows: %s", len(sheet_rows))
+
+    if hasattr(sheet_parser, "diagnostics"):
+        diagnostics.extend(sheet_parser.diagnostics)
 
     dclgen_texts: list[str] = []
-    diagnostics.append("DCLGEN files selected:")
 
-    for dclgen_path in DCLGEN_PATHS:
-        diagnostics.append(f" - {dclgen_path}")
+    diagnostics.append(f"DCLGEN file count: {len(DCLGEN_PATHS)}")
+    logger.info("DCLGEN file count: %s", len(DCLGEN_PATHS))
+
+    for index, dclgen_path in enumerate(DCLGEN_PATHS, start=1):
         dclgen_file = LocalUploadedFile(dclgen_path)
         dclgen_text = file_loader.read_uploaded_text(dclgen_file)
-        diagnostics.append(f"DCLGEN file: {dclgen_path}")
-        diagnostics.append(f"DCLGEN text length: {len(dclgen_text)}")
         dclgen_texts.append(dclgen_text)
 
-    dclgen_columns = dclgen_parser.parse_many_texts(dclgen_texts)
-    diagnostics.append(f"DCLGEN parsed columns: {len(dclgen_columns)}")
-    diagnostics.extend(dclgen_parser.diagnostics)
+        diagnostics.append(f"DCLGEN {index}: {dclgen_path}")
+        diagnostics.append(f"DCLGEN {index} text length: {len(dclgen_text)}")
+        logger.info("DCLGEN %s: %s", index, dclgen_path)
+        logger.info("DCLGEN %s text length: %s", index, len(dclgen_text))
 
-    logger.info("DCLGEN parsed columns: %s", len(dclgen_columns))
+    if hasattr(dclgen_parser, "parse_many_texts"):
+        dclgen_columns = dclgen_parser.parse_many_texts(dclgen_texts)
+    else:
+        dclgen_columns = []
+
+        for index, dclgen_text in enumerate(dclgen_texts, start=1):
+            parsed_columns = dclgen_parser.parse(
+                text=dclgen_text,
+                source_label=f"DCLGEN file {index}",
+            )
+            dclgen_columns.extend(parsed_columns)
+
+    diagnostics.append(f"DCLGEN total columns: {len(dclgen_columns)}")
+    logger.info("DCLGEN total columns: %s", len(dclgen_columns))
+
+    if hasattr(dclgen_parser, "diagnostics"):
+        diagnostics.extend(dclgen_parser.diagnostics)
 
     copybook_text_parts: list[str] = []
 
-    if COPYBOOK_PATHS:
-        diagnostics.append("Copybook files selected:")
+    diagnostics.append(f"Copybook file count: {len(COPYBOOK_PATHS)}")
+    logger.info("Copybook file count: %s", len(COPYBOOK_PATHS))
 
-    for copybook_path in COPYBOOK_PATHS:
-        diagnostics.append(f" - {copybook_path}")
+    for index, copybook_path in enumerate(COPYBOOK_PATHS, start=1):
         copybook_file = LocalUploadedFile(copybook_path)
         copybook_text = file_loader.read_uploaded_text(copybook_file)
-        diagnostics.append(f"Copybook file: {copybook_path}")
-        diagnostics.append(f"Copybook text length: {len(copybook_text)}")
         copybook_text_parts.append(copybook_text)
 
-    copybook_text = "\n".join(copybook_text_parts)
-    copybook_fields = copybook_parser.parse(copybook_text)
-    diagnostics.append(f"Copybook parsed fields: {len(copybook_fields)}")
+        diagnostics.append(f"Copybook {index}: {copybook_path}")
+        diagnostics.append(f"Copybook {index} text length: {len(copybook_text)}")
+        logger.info("Copybook %s: %s", index, copybook_path)
+        logger.info("Copybook %s text length: %s", index, len(copybook_text))
 
-    logger.info("Copybook parsed fields: %s", len(copybook_fields))
+    copybook_text = "\n".join(copybook_text_parts)
+
+    if copybook_text.strip():
+        try:
+            copybook_fields = copybook_parser.parse(
+                text=copybook_text,
+                source_label="Copybook files",
+            )
+        except TypeError:
+            copybook_fields = copybook_parser.parse(copybook_text)
+    else:
+        copybook_fields = []
+
+    diagnostics.append(f"Copybook total fields: {len(copybook_fields)}")
+    logger.info("Copybook total fields: %s", len(copybook_fields))
+
+    if hasattr(copybook_parser, "diagnostics"):
+        diagnostics.extend(copybook_parser.diagnostics)
 
     source_file = LocalUploadedFile(IDMS_COBOL_SOURCE_PATH)
     idms_cobol_text = file_loader.read_uploaded_text(source_file)
+
     diagnostics.append(f"IDMS COBOL source file: {IDMS_COBOL_SOURCE_PATH}")
     diagnostics.append(f"IDMS COBOL source text length: {len(idms_cobol_text)}")
-
+    logger.info("IDMS COBOL source file: %s", IDMS_COBOL_SOURCE_PATH)
     logger.info("IDMS COBOL source text length: %s", len(idms_cobol_text))
 
     return (
@@ -163,13 +199,12 @@ def load_inputs(
 
 
 def run_conversion() -> None:
+    validate_inputs()
+
     logger = LoggerFactory.create_logger(
-        name="run_update",
+        name="idms_db2_update_conversion",
         logs_dir=LOGS_DIR,
     )
-
-    logger.info("Update conversion started.")
-    validate_inputs()
 
     (
         sheet_rows,
@@ -208,7 +243,7 @@ def run_conversion() -> None:
     print(f"Output file created: {output_cobol_path}")
     print("")
     print("Input Summary")
-    print("-------------")
+    print("")
     print(f"Project Root       : {PROJECT_ROOT}")
     print(f"SRC Directory      : {SRC_DIR}")
     print(f"Sheet Mapping Rows : {len(sheet_rows)}")
@@ -218,8 +253,25 @@ def run_conversion() -> None:
     print(f"Target PROGRAM-ID  : {TARGET_PROGRAM_ID}")
 
     print("")
+    print("Selected Input Files")
+    print("")
+    print(f"Sheet Mapping      : {SHEET_MAPPING_PATH}")
+    print(f"IDMS COBOL Source  : {IDMS_COBOL_SOURCE_PATH}")
+
+    print("DCLGEN Files:")
+    for path in DCLGEN_PATHS:
+        print(f" - {path}")
+
+    if COPYBOOK_PATHS:
+        print("Copybook Files:")
+        for path in COPYBOOK_PATHS:
+            print(f" - {path}")
+    else:
+        print("Copybook Files     : None")
+
+    print("")
     print("Validation Messages")
-    print("-------------------")
+    print("")
 
     if result.validation_messages:
         for message in result.validation_messages:
@@ -230,7 +282,7 @@ def run_conversion() -> None:
 
     print("")
     print("Diagnostics")
-    print("-----------")
+    print("")
 
     for diagnostic in diagnostics:
         print(f"- {diagnostic}")
