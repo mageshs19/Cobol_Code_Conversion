@@ -1,0 +1,98 @@
+19-08-2026 13:58:56 | INFO | idms_db2_update_conversion | Logger initialized.
+19-08-2026 13:58:56 | INFO | idms_db2_update_conversion | Log file: C:\VSCode\IDMS-DB2-CC-New\IDMS-DB2-Code-Conversion\logs\idms_db2_conversion_19-08-2026_135856.log
+19-08-2026 13:58:56 | INFO | idms_db2_update_conversion | START LOAD INPUTS
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Sheet Mapping file: C:\S\S-Input\Excel_Sheet_mapping.csv
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Sheet Mapping rows: 840
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN file count: 3
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 1: C:\S\S-Input\DCLGENS_BEFF.txt
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 1 text length: 3882
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 2: C:\S\S-Input\DCLGENS_BFAR.txt
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 2 text length: 7344
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 3: C:\S\S-Input\DCLGENS_EVEF.txt
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN 3 text length: 3035
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | DCLGEN total columns: 89
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Copybook file count: 1
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Copybook 1: C:\S\S-Input\Copybook.txt
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Copybook 1 text length: 115952
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | Copybook total fields: 1
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | IDMS COBOL source file: C:\S\S-Input\Update.txt
+19-08-2026 13:58:57 | INFO | idms_db2_update_conversion | IDMS COBOL source text length: 14764
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DB2 COBOL generation completed.
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Output file created: C:\S\S-Input\Output\Update_19-08-2026_135858.cbl
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Mapping validation: DB2 column mapping is missing. Table=DZ01FFTB
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Mapping validation: DB2 column mapping is missing. Table=DZ01RSTB
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update restart/control skip: restart/control record FFRECAB requires manual DB2 redesign.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: Sheet Mapping rows received: 840
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: DCLGEN columns received: 89
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: paragraphs detected: 7
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: cursor loops detected: 0
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: output writes detected: 4
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Program flow analyzer: DB2 date usages detected: 16
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Field usage analyzer: records with usage detected: 2
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Field usage analyzer: record=FFRECAB, condition=0, output=0, move_source=0, move_target=6, dclgen=0
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Field usage analyzer: record=VMBFAR, condition=0, output=0, move_source=0, move_target=0, dclgen=10
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | DB2 infrastructure: no operation-specific DCLGEN includes resolved.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | DB2 infrastructure: generated infrastructure block inserted.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | DB2 cursor paragraphs: no cursor operations found.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Timestamp generator: timestamp working storage and paragraph ensured.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Feedback cleanup: added missing DCLGEN include DZBFARTV.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update SQL feedback: normalized malformed PERFORM SQLERROR.END-IF.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update SQL feedback: resolved bare MOVE target through Sheet Mapping and DCLGEN.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update SQL feedback: rewrote OBTAIN CALC SELECT to primary-key-only SELECT.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update SQL feedback: rewrote MODIFY UPDATE to changed field plus update audit fields.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update structure feedback: moved DCLGEN includes into DB2 infrastructure.
+19-08-2026 13:58:58 | WARNING | idms_db2_update_conversion | Update structure feedback: moved STOP RUN before timestamp paragraph.
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | START LOAD INPUTS
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping file: C:\S\S-Input\Excel_Sheet_mapping.csv
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping rows: 840
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping file name: excel_sheet_mapping.csv
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping file size bytes: 80425
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | CSV/text decoded length: 80425
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | CSV/text sample: Cobol Recrd IDMS,Cobol Zone,IDMS Key,IDMS PIC Clause,Length of Field Bytes,Field end position,DB2 key,New DB2 Record ,New DB2_Field name,New DB2 DataType,Hopex Expression Type,Remarks,Relation,Reference Field Name (Copybook),Reference Field PIC Clause,Cross Application DB2 table,Cross Application DB2 Field Name,Cross Appln DB2 DataType,,Basetype\r\nVMBFC,   02  KY-VMBFC.,,,9,9,,,,,,,,,,,,,,\r\nVMBFC, 03 CT-RK-TGDSV,CALC,PIC X(4 ),4,13,Primary Key,DZMBFCTB,CT_RKTGDSC_479MBFC,CHAR(4),Identifiier(*) NR
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | CSV detected headers: ['Cobol Recrd IDMS', 'Cobol Zone', 'IDMS Key', 'IDMS PIC Clause', 'Length of Field Bytes', 'Field end position', 'DB2 key', 'New DB2 Record', 'New DB2_Field name', 'New DB2 DataType', 'Hopex Expression Type', 'Remarks', 'Relation', 'Reference Field Name (Copybook)', 'Reference Field PIC Clause', 'Cross Application DB2 table', 'Cross Application DB2 Field Name', 'Cross Appln DB2 DataType', '', 'Basetype']
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | CSV parsed useful rows: 840
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping populated Cobol Record IDMS rows: 835
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping populated source field rows: 630
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping populated DB2 table rows: 617
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping populated DB2 column rows: 560
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Sheet Mapping useful source-to-target rows: 370
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file count: 3
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 1: C:\S\S-Input\DCLGENS_BEFF.txt
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 1 text length: 3882
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 2: C:\S\S-Input\DCLGENS_BFAR.txt
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 2 text length: 7344
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 3: C:\S\S-Input\DCLGENS_EVEF.txt
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN 3 text length: 3035
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN total columns: 89
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN input file count: 3
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1 input length: 3882
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: resolved table name: DZBEFFTV
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: DECLARE section 1 parsed SQL columns: 22
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: COBOL host field scan found 22 field(s).
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: SQL columns parsed: 22
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: COBOL host fields parsed: 22
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1: merged DCLGEN columns: 22
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 1 parsed columns: 22
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2 input length: 7344
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: resolved table name: DZBFARTV
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: DECLARE section 1 parsed SQL columns: 51
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: COBOL host field scan found 51 field(s).
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: SQL columns parsed: 51
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: COBOL host fields parsed: 51
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2: merged DCLGEN columns: 51
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 2 parsed columns: 51
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3 input length: 3035
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: resolved table name: DZEVEFTV
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: DECLARE section 1 parsed SQL columns: 16
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: COBOL host field scan found 16 field(s).
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: SQL columns parsed: 16
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: COBOL host fields parsed: 16
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3: merged DCLGEN columns: 16
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN file 3 parsed columns: 16
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | DCLGEN total parsed columns: 89
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Copybook file count: 1
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Copybook 1: C:\S\S-Input\Copybook.txt
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Copybook 1 text length: 115952
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | Copybook total fields: 1
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | IDMS COBOL source file: C:\S\S-Input\Update.txt
+19-08-2026 13:58:58 | INFO | idms_db2_update_conversion | IDMS COBOL source text length: 14764

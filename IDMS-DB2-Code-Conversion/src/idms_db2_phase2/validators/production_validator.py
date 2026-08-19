@@ -1,17 +1,3 @@
-"""
-Production validator.
-
-Performs production-focused validation for generated DB2 COBOL.
-
-It detects:
-- Missing required DB2 constructs.
-- Undefined TODO host variables.
-- Generated DB2 error markers.
-- Residual executable IDMS statements.
-- Residual IDMS declarative/control statements.
-- Generated DCLGEN host variables not found in uploaded DCLGEN metadata.
-"""
-
 from idms_db2_phase2.repositories.dclgen_repository import DclgenRepository
 from idms_db2_phase2.services.name_normalizer import NameNormalizer
 from patterns.sequence_patterns import strip_sequence_numbers
@@ -30,6 +16,20 @@ from rules.validation_rules import PRODUCTION_VALIDATION_MESSAGES
 
 
 class ProductionValidator:
+    """
+    Performs production-focused validation for generated DB2 COBOL.
+
+    It detects:
+    - Missing required DB2 constructs.
+    - TODO host variables.
+    - Generated DB2 error markers.
+    - Residual executable IDMS statements.
+    - Residual IDMS declarative/control statements.
+    - Generated DCLGEN host variables not found in uploaded DCLGEN metadata.
+
+    This validator must ignore commented fixed-format lines.
+    """
+
     def __init__(
         self,
         dclgen_repository: DclgenRepository,
@@ -56,56 +56,61 @@ class ProductionValidator:
 
     def _validate_required_db2_tokens(
         self,
-        converted_cobol_text: str,
+        text: str,
         messages: list[str],
     ) -> None:
-        upper = converted_cobol_text.upper()
+        upper_text = text.upper()
 
         for token in REQUIRED_DB2_TOKENS:
-            if token not in upper:
-                messages.append(
-                    f"Production validation: required DB2 token missing: {token}"
-                )
+            if token.upper() in upper_text:
+                continue
+
+            key = f"missing_{NameNormalizer.normalize(token).lower()}"
+
+            if key in PRODUCTION_VALIDATION_MESSAGES:
+                messages.append(PRODUCTION_VALIDATION_MESSAGES[key])
+                continue
+
+            messages.append(
+                f"Production validation: required DB2 token missing: {token}"
+            )
 
     def _validate_no_todo_or_generated_error(
         self,
-        converted_cobol_text: str,
+        text: str,
         messages: list[str],
     ) -> None:
-        if TODO_HOST_VARIABLE_PATTERN.search(converted_cobol_text):
+        if TODO_HOST_VARIABLE_PATTERN.search(text):
             messages.append(
                 PRODUCTION_VALIDATION_MESSAGES["todo_host_variable"]
             )
 
-        if TODO_DB2_PATTERN.search(converted_cobol_text):
+        if TODO_DB2_PATTERN.search(text):
             messages.append(
                 PRODUCTION_VALIDATION_MESSAGES["todo_db2"]
             )
 
-        if ERROR_DB2_PATTERN.search(converted_cobol_text):
+        if ERROR_DB2_PATTERN.search(text):
             messages.append(
                 PRODUCTION_VALIDATION_MESSAGES["error_db2"]
             )
 
-        if UNABLE_TO_DECLARE_CURSOR_PATTERN.search(converted_cobol_text):
+        if UNABLE_TO_DECLARE_CURSOR_PATTERN.search(text):
             messages.append(
                 PRODUCTION_VALIDATION_MESSAGES["unable_to_declare_cursor"]
             )
 
-        if NO_FETCH_HOST_VARIABLES_PATTERN.search(converted_cobol_text):
+        if NO_FETCH_HOST_VARIABLES_PATTERN.search(text):
             messages.append(
                 PRODUCTION_VALIDATION_MESSAGES["no_fetch_host_variables"]
             )
 
     def _validate_forbidden_idms_patterns(
         self,
-        converted_cobol_text: str,
+        text: str,
         messages: list[str],
     ) -> None:
-        for line_number, line in enumerate(
-            converted_cobol_text.splitlines(),
-            start=1,
-        ):
+        for line_number, line in enumerate(text.splitlines(), start=1):
             logical = self._logical_line(line)
 
             if self._is_comment_or_blank(logical):
@@ -114,20 +119,17 @@ class ProductionValidator:
             for pattern in FORBIDDEN_EXECUTABLE_IDMS_PATTERNS:
                 if pattern.search(logical):
                     messages.append(
-                        "Production validation: residual executable IDMS statement remains "
-                        f"near line {line_number}: {logical}"
+                        "Production validation: residual executable IDMS statement "
+                        f"remains near line {line_number}: {logical}"
                     )
                     break
 
     def _validate_forbidden_idms_declaratives(
         self,
-        converted_cobol_text: str,
+        text: str,
         messages: list[str],
     ) -> None:
-        for line_number, line in enumerate(
-            converted_cobol_text.splitlines(),
-            start=1,
-        ):
+        for line_number, line in enumerate(text.splitlines(), start=1):
             logical = self._logical_line(line)
 
             if self._is_comment_or_blank(logical):
@@ -136,8 +138,8 @@ class ProductionValidator:
             for pattern in FORBIDDEN_IDMS_DECLARATIVE_PATTERNS:
                 if pattern.search(logical):
                     messages.append(
-                        "Production validation: residual IDMS declarative/control statement remains "
-                        f"near line {line_number}: {logical}"
+                        "Production validation: residual IDMS declarative/control "
+                        f"statement remains near line {line_number}: {logical}"
                     )
                     break
 
@@ -147,13 +149,13 @@ class ProductionValidator:
         messages: list[str],
     ) -> None:
         generated_hosts = self._generated_dclgen_host_references(
-            converted_cobol_text,
+            converted_cobol_text
         )
 
         if not generated_hosts:
             return
 
-        valid_hosts = self.dclgen_repository.valid_host_references()
+        valid_hosts = self._valid_dclgen_host_reference_keys()
 
         if not valid_hosts:
             messages.append(
@@ -181,16 +183,74 @@ class ProductionValidator:
             group = NameNormalizer.to_cobol(match.group("group"))
             field = NameNormalizer.to_cobol(match.group("field"))
 
-            if group and field:
-                output.add(f"{group} . {field}")
+            key = self._host_key(group=group, field=field)
+
+            if key:
+                output.add(key)
 
         return output
+
+    def _valid_dclgen_host_reference_keys(
+        self,
+    ) -> set[str]:
+        output: set[str] = set()
+
+        for column in self.dclgen_repository.all():
+            table = NameNormalizer.normalize(column.table_name)
+            field = NameNormalizer.to_cobol(
+                column.cobol_host_name or column.column_name
+            )
+
+            if not table or not field:
+                continue
+
+            group = self.dclgen_repository.group_for_table(table)
+            key = self._host_key(group=group, field=field)
+
+            if key:
+                output.add(key)
+
+        return output
+
+    def _host_key(
+        self,
+        group: str,
+        field: str,
+    ) -> str:
+        clean_group = NameNormalizer.to_cobol(group)
+        clean_field = NameNormalizer.to_cobol(field)
+
+        if not clean_group or not clean_field:
+            return ""
+
+        return f"{clean_group}.{clean_field}"
 
     def _logical_line(
         self,
         line: str,
     ) -> str:
-        return strip_sequence_numbers(line)
+        text = str(line or "").rstrip()
+
+        if self._is_fixed_format_comment(text):
+            return "*"
+
+        return strip_sequence_numbers(text).strip()
+
+    def _is_fixed_format_comment(
+        self,
+        line: str,
+    ) -> bool:
+        text = str(line or "")
+
+        if len(text) >= 7 and text[:6].isdigit() and text[6:7] in ("*", "/"):
+            return True
+
+        stripped = text.strip()
+
+        if stripped.startswith("*") or stripped.startswith("/"):
+            return True
+
+        return False
 
     def _is_comment_or_blank(
         self,
@@ -201,7 +261,7 @@ class ProductionValidator:
         if not stripped:
             return True
 
-        if stripped.startswith("*"):
+        if stripped.startswith("*") or stripped.startswith("/"):
             return True
 
         return False

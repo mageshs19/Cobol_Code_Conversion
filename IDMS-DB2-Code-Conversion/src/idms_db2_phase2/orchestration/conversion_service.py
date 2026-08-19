@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from idms_db2_phase2.analyzers.program_flow_analyzer import ProgramFlowAnalyzer
 from idms_db2_phase2.composers.cobol_formatter import CobolFormatter
 from idms_db2_phase2.composers.cursor_flow_composer import CursorFlowComposer
@@ -7,11 +9,21 @@ from idms_db2_phase2.composers.cursor_order_cleanup_composer import (
 from idms_db2_phase2.composers.db2_date_comparison_composer import (
     Db2DateComparisonComposer,
 )
+from idms_db2_phase2.composers.feedback_cleanup_composer import (
+    FeedbackCleanupComposer,
+)
+from idms_db2_phase2.composers.final_feedback_fix_composer import (
+    FinalFeedbackFixComposer,
+    FinalFeedbackFixComposerConfig,
+)
 from idms_db2_phase2.composers.fixed_format_composer import FixedFormatComposer
 from idms_db2_phase2.composers.manual_layout_composer import ManualLayoutComposer
 from idms_db2_phase2.composers.manual_style_preserver import ManualStylePreserver
 from idms_db2_phase2.composers.sqlcode_wrapper_cleanup_composer import (
     SqlcodeWrapperCleanupComposer,
+)
+from idms_db2_phase2.composers.update_program_feedback_composer import (
+    UpdateProgramFeedbackComposer,
 )
 from idms_db2_phase2.composers.update_restart_skip_composer import (
     UpdateRestartSkipComposer,
@@ -32,7 +44,9 @@ from idms_db2_phase2.repositories.mapping_repository import MappingRepository
 from idms_db2_phase2.resolvers.column_name_resolver import ColumnNameResolver
 from idms_db2_phase2.resolvers.cursor_name_resolver import CursorNameResolver
 from idms_db2_phase2.resolvers.host_variable_resolver import HostVariableResolver
-from idms_db2_phase2.resolvers.record_context_resolver import RecordContextResolver
+from idms_db2_phase2.resolvers.record_context_resolver import (
+    RecordContextResolver,
+)
 from idms_db2_phase2.resolvers.table_name_resolver import TableNameResolver
 from idms_db2_phase2.transformers.cobol_transformer import CobolTransformer
 from idms_db2_phase2.transformers.field_reference_rewriter import (
@@ -41,7 +55,9 @@ from idms_db2_phase2.transformers.field_reference_rewriter import (
 from idms_db2_phase2.transformers.idms_statement_transformer import (
     IdmsStatementTransformer,
 )
-from idms_db2_phase2.transformers.pic_length_auto_fixer import PicLengthAutoFixer
+from idms_db2_phase2.transformers.pic_length_auto_fixer import (
+    PicLengthAutoFixer,
+)
 from idms_db2_phase2.validators.input_validator import InputValidator
 from idms_db2_phase2.validators.mapping_validator import MappingValidator
 from idms_db2_phase2.validators.production_validator import ProductionValidator
@@ -49,7 +65,19 @@ from idms_db2_phase2.validators.production_validator import ProductionValidator
 
 class ConversionService:
     """
-    Orchestrates IDMS COBOL to DB2 COBOL conversion.
+    Main orchestration service for IDMS COBOL to DB2 COBOL conversion.
+
+    Responsibilities:
+    - Validate required inputs.
+    - Build repositories and resolvers.
+    - Transform IDMS database logic into DB2 SQL logic.
+    - Apply DB2 infrastructure generation.
+    - Apply conservative feedback cleanup.
+    - Apply final manual-style fixed-format output.
+    - Run production validation.
+
+    This service does not hardcode business records, DB2 tables, DB2 columns,
+    DCLGEN groups, or host variables.
     """
 
     def convert(
@@ -59,11 +87,10 @@ class ConversionService:
         validation_messages: list[str] = []
 
         input_validator = InputValidator()
-        validation_messages.extend(
-            input_validator.validate(conversion_input)
-        )
+        input_messages = input_validator.validate(conversion_input)
+        validation_messages.extend(input_messages)
 
-        if validation_messages:
+        if input_messages:
             return ConversionResult(
                 converted_cobol="",
                 validation_messages=self._unique_messages(validation_messages),
@@ -72,13 +99,6 @@ class ConversionService:
 
         repositories = self._repositories(conversion_input)
         resolvers = self._resolvers(repositories)
-
-        mapping_validator = MappingValidator(
-            mapping_repository=repositories["mapping"],
-            dclgen_repository=repositories["dclgen"],
-            table_name_resolver=resolvers["table_name"],
-        )
-        validation_messages.extend(mapping_validator.validate())
 
         generators = self._generators(
             repositories=repositories,
@@ -91,7 +111,17 @@ class ConversionService:
             generators=generators,
         )
 
-        composers = self._composers()
+        composers = self._composers(
+            repositories=repositories,
+            resolvers=resolvers,
+        )
+
+        mapping_validator = MappingValidator(
+            mapping_repository=repositories["mapping"],
+            dclgen_repository=repositories["dclgen"],
+            table_name_resolver=resolvers["table_name"],
+        )
+        validation_messages.extend(mapping_validator.validate())
 
         converted_cobol, transform_messages, operations = transformers[
             "cobol"
@@ -99,35 +129,30 @@ class ConversionService:
             cobol_text=conversion_input.idms_cobol_text,
             target_program_id=conversion_input.target_program_id,
         )
-
         validation_messages.extend(transform_messages)
 
         converted_cobol = composers["update_restart_skip"].compose(
             converted_cobol
         )
-
         validation_messages.extend(
-            composers["update_restart_skip"].messages
+            self._component_messages(composers["update_restart_skip"])
         )
 
         flow_analyzer = ProgramFlowAnalyzer(
             mapping_rows=conversion_input.sheet_mapping_rows,
             dclgen_columns=conversion_input.dclgen_columns,
         )
-
         flow_analysis = flow_analyzer.analyze(
             cobol_text=conversion_input.idms_cobol_text,
             operations=operations,
         )
-
         validation_messages.extend(flow_analysis.diagnostics)
 
         converted_cobol = transformers["field_reference"].rewrite(
             converted_cobol
         )
-
         validation_messages.extend(
-            transformers["field_reference"].rewrite_messages
+            self._component_messages(transformers["field_reference"])
         )
 
         converted_cobol, infrastructure_messages = generators[
@@ -136,7 +161,6 @@ class ConversionService:
             cobol_text=converted_cobol,
             operations=operations,
         )
-
         validation_messages.extend(infrastructure_messages)
 
         converted_cobol = composers["cursor_order_cleanup"].compose(
@@ -149,12 +173,9 @@ class ConversionService:
             cobol_text=converted_cobol,
             operations=operations,
         )
-
         validation_messages.extend(cursor_messages)
 
-        converted_cobol = composers["cursor_flow"].compose(
-            converted_cobol
-        )
+        converted_cobol = composers["cursor_flow"].compose(converted_cobol)
 
         converted_cobol = composers["sqlcode_cleanup"].compose(
             converted_cobol
@@ -164,15 +185,12 @@ class ConversionService:
             converted_cobol
         )
 
-        converted_cobol = composers["date_compare"].compose(
-            converted_cobol
-        )
+        converted_cobol = composers["date_compare"].compose(converted_cobol)
 
         converted_cobol, timestamp_messages = generators["timestamp"].apply(
             cobol_text=converted_cobol,
             target_program_id=conversion_input.target_program_id,
         )
-
         validation_messages.extend(timestamp_messages)
 
         converted_cobol = generators["sql_error"].ensure_sql_error_paragraph(
@@ -184,31 +202,43 @@ class ConversionService:
                 source_cobol_text=conversion_input.idms_cobol_text,
                 converted_cobol_text=converted_cobol,
             )
-
             validation_messages.extend(
-                transformers["pic_length"].messages
+                self._component_messages(transformers["pic_length"])
             )
 
-        converted_cobol = composers["formatter"].format(
+        converted_cobol = composers["feedback_cleanup"].compose(
             converted_cobol
+        )
+        validation_messages.extend(
+            self._component_messages(composers["feedback_cleanup"])
         )
 
-        converted_cobol = composers["manual_layout"].compose(
+        converted_cobol = composers["update_restart_skip"].compose(
             converted_cobol
         )
+        validation_messages.extend(
+            self._component_messages(composers["update_restart_skip"])
+        )
+
+        converted_cobol = composers["update_program_feedback"].compose(
+            converted_cobol
+        )
+        validation_messages.extend(
+            self._component_messages(composers["update_program_feedback"])
+        )
+
+        converted_cobol = composers["formatter"].format(converted_cobol)
+
+        converted_cobol = composers["manual_layout"].compose(converted_cobol)
 
         converted_cobol = composers["style_preserver"].preserve(
             original_text=conversion_input.idms_cobol_text,
             converted_text=converted_cobol,
         )
 
-        converted_cobol = composers["fixed_format"].format(
-            converted_cobol
-        )
+        converted_cobol = composers["fixed_format"].format(converted_cobol)
 
-        converted_cobol = composers["cursor_flow"].compose(
-            converted_cobol
-        )
+        converted_cobol = composers["cursor_flow"].compose(converted_cobol)
 
         converted_cobol = composers["sqlcode_cleanup"].compose(
             converted_cobol
@@ -218,18 +248,38 @@ class ConversionService:
             converted_cobol
         )
 
-        converted_cobol = composers["date_compare"].compose(
+        converted_cobol = composers["date_compare"].compose(converted_cobol)
+
+        converted_cobol = composers["feedback_cleanup"].compose(
             converted_cobol
         )
+        validation_messages.extend(
+            self._component_messages(composers["feedback_cleanup"])
+        )
 
-        converted_cobol = composers["fixed_format"].format(
+        converted_cobol = composers["update_restart_skip"].compose(
+            converted_cobol
+        )
+        validation_messages.extend(
+            self._component_messages(composers["update_restart_skip"])
+        )
+
+        converted_cobol = composers["update_program_feedback"].compose(
+            converted_cobol
+        )
+        validation_messages.extend(
+            self._component_messages(composers["update_program_feedback"])
+        )
+
+        converted_cobol = composers["fixed_format"].format(converted_cobol)
+
+        converted_cobol = composers["final_feedback_fix"].compose(
             converted_cobol
         )
 
         production_validator = ProductionValidator(
             dclgen_repository=repositories["dclgen"],
         )
-
         validation_messages.extend(
             production_validator.validate(converted_cobol)
         )
@@ -372,18 +422,61 @@ class ConversionService:
 
     def _composers(
         self,
+        repositories: dict[str, object],
+        resolvers: dict[str, object],
     ) -> dict[str, object]:
         return {
             "formatter": CobolFormatter(),
             "cursor_flow": CursorFlowComposer(),
             "cursor_order_cleanup": CursorOrderCleanupComposer(),
             "date_compare": Db2DateComparisonComposer(),
-            "sqlcode_cleanup": SqlcodeWrapperCleanupComposer(),
-            "manual_layout": ManualLayoutComposer(),
-            "style_preserver": ManualStylePreserver(),
+            "feedback_cleanup": FeedbackCleanupComposer(
+                dclgen_repository=repositories["dclgen"],
+            ),
+            "final_feedback_fix": FinalFeedbackFixComposer(
+                config=FinalFeedbackFixComposerConfig(
+                    db2_date_external_format="DD.MM.YYYY",
+                    require_order_by_columns_in_select=False,
+                )
+            ),
             "fixed_format": FixedFormatComposer(),
+            "manual_layout": ManualLayoutComposer(),
+            "sqlcode_cleanup": SqlcodeWrapperCleanupComposer(),
+            "style_preserver": ManualStylePreserver(),
+            "update_program_feedback": UpdateProgramFeedbackComposer(
+                mapping_repository=repositories["mapping"],
+                dclgen_repository=repositories["dclgen"],
+                table_name_resolver=resolvers["table_name"],
+                host_variable_resolver=resolvers["host_variable"],
+            ),
             "update_restart_skip": UpdateRestartSkipComposer(),
         }
+
+    def _component_messages(
+        self,
+        component: object,
+    ) -> list[str]:
+        """
+        Safely return messages from components that optionally expose messages.
+
+        Some transformers/composers expose a messages attribute, while others
+        do not. This helper keeps orchestration generic and avoids forcing all
+        components to implement the same diagnostics interface.
+        """
+
+        messages = getattr(component, "messages", [])
+
+        if callable(messages):
+            messages = messages()
+
+        if not messages:
+            return []
+
+        return [
+            str(message)
+            for message in messages
+            if str(message or "").strip()
+        ]
 
     def _unique_messages(
         self,

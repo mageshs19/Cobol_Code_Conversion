@@ -32,8 +32,13 @@ class IdmsStatementTransformer:
     """
     Converts executable IDMS statements to DB2-compatible COBOL.
 
-    This transformer contains conversion logic only. Regex patterns live in
-    patterns/idms_patterns.py.
+    This transformer contains conversion logic only.
+    Regex patterns live in patterns/idms_patterns.py.
+
+    Important:
+    - SqlGenerator methods already generate SQLCODE checks where required.
+    - This transformer must not add duplicate SQLCODE wrappers around
+      generated SQL blocks.
     """
 
     def __init__(
@@ -61,52 +66,40 @@ class IdmsStatementTransformer:
         if not stripped_line:
             return [line], ""
 
-        if self._is_idms_declarative_or_control_statement(upper):
-            return [
-                f"* DB2: Removed residual IDMS control statement: {stripped_line}",
-            ], ""
-
-        if IDMS_STATUS_PERFORM_PATTERN.search(upper) or IDMS_ABORT_PERFORM_PATTERN.search(upper):
-            return self._removed_idms_executable_lines(
-                message=f"* DB2: Removed IDMS status/abort paragraph call: {stripped_line}",
-                current_division=current_division,
-            ), ""
-
-        if BIND_STATEMENT_PATTERN.search(upper):
-            return self._removed_idms_executable_lines(
-                message=f"* DB2: Removed IDMS BIND statement: {stripped_line}",
-                current_division=current_division,
-            ), ""
-
-        if USAGE_MODE_PATTERN.search(upper) or READY_PATTERN.search(upper):
-            return self._removed_idms_executable_lines(
-                message=f"* DB2: Removed IDMS usage/READY statement: {stripped_line}",
-                current_division=current_division,
-            ), ""
-
-        if FIND_CURRENT_PATTERN.search(upper):
-            return self._removed_idms_executable_lines(
-                message=f"* DB2: Removed IDMS FIND CURRENT statement: {stripped_line}",
-                current_division=current_division,
-            ), ""
-
-        if CONNECT_STATEMENT_PATTERN.search(upper) or DISCONNECT_STATEMENT_PATTERN.search(upper):
-            return self._removed_idms_executable_lines(
-                message=f"* DB2: Removed IDMS relationship statement. Relationship is handled by DB2 keys: {stripped_line}",
-                current_division=current_division,
-            ), ""
+        declarative_result = self._convert_declarative_or_control(
+            upper=upper,
+            stripped_line=stripped_line,
+        )
+        if declarative_result is not None:
+            return declarative_result, ""
 
         finish_result = self._convert_finish_or_commit(
             upper=upper,
             stripped_line=stripped_line,
             current_division=current_division,
         )
-
         if finish_result is not None:
             return finish_result, ""
 
-        on_not_found_result = self._convert_on_db_rec_not_found(stripped_line)
+        bind_ready_result = self._convert_bind_ready_connect_disconnect(
+            upper=upper,
+            stripped_line=stripped_line,
+            current_division=current_division,
+        )
+        if bind_ready_result is not None:
+            return bind_ready_result, ""
 
+        status_result = self._convert_status_abort_perform(
+            upper=upper,
+            stripped_line=stripped_line,
+            current_division=current_division,
+        )
+        if status_result is not None:
+            return status_result, ""
+
+        on_not_found_result = self._convert_on_db_rec_not_found(
+            stripped_line=stripped_line,
+        )
         if on_not_found_result is not None:
             return on_not_found_result, ""
 
@@ -116,25 +109,30 @@ class IdmsStatementTransformer:
             current_division=current_division,
             sql_error_paragraph=sql_error_paragraph,
         )
-
         if obtain_calc_result is not None:
             return obtain_calc_result, ""
 
-        obtain_set_result, opened_set = self._convert_obtain_set(
+        obtain_first_next_result, opened_set = self._convert_obtain_first_next(
             upper=upper,
             stripped_line=stripped_line,
             current_division=current_division,
         )
+        if obtain_first_next_result is not None:
+            return obtain_first_next_result, opened_set
 
-        if obtain_set_result is not None:
-            return obtain_set_result, opened_set
+        find_current_result = self._convert_find_current(
+            upper=upper,
+            stripped_line=stripped_line,
+            current_division=current_division,
+        )
+        if find_current_result is not None:
+            return find_current_result, ""
 
         find_first_result, opened_set = self._convert_find_first(
             upper=upper,
             stripped_line=stripped_line,
             current_division=current_division,
         )
-
         if find_first_result is not None:
             return find_first_result, opened_set
 
@@ -144,11 +142,22 @@ class IdmsStatementTransformer:
             current_division=current_division,
             sql_error_paragraph=sql_error_paragraph,
         )
-
         if store_result is not None:
             return store_result, ""
 
         return self._replace_idms_condition_tokens(line), ""
+
+    def _convert_declarative_or_control(
+        self,
+        upper: str,
+        stripped_line: str,
+    ) -> list[str] | None:
+        if not self._is_idms_declarative_or_control_statement(upper):
+            return None
+
+        return [
+            f"*DB2: Removed residual IDMS control statement: {stripped_line}",
+        ]
 
     def _convert_finish_or_commit(
         self,
@@ -158,18 +167,80 @@ class IdmsStatementTransformer:
     ) -> list[str] | None:
         if FINISH_PATTERN.search(upper):
             if current_division != "PROCEDURE":
-                return [f"* DB2: FINISH ignored outside PROCEDURE DIVISION: {stripped_line}"]
+                return [
+                    f"*DB2: FINISH ignored outside PROCEDURE DIVISION: {stripped_line}"
+                ]
 
             return [
-                "* DB2: IDMS FINISH converted to COMMIT.",
+                "*DB2: IDMS FINISH converted to COMMIT.",
                 *self.sql_generator.commit(),
             ]
 
         if COMMIT_PATTERN.search(upper) and "EXEC SQL" not in upper:
             if current_division != "PROCEDURE":
-                return [f"* DB2: COMMIT ignored outside PROCEDURE DIVISION: {stripped_line}"]
+                return [
+                    f"*DB2: COMMIT ignored outside PROCEDURE DIVISION: {stripped_line}"
+                ]
 
             return self.sql_generator.commit()
+
+        return None
+
+    def _convert_bind_ready_connect_disconnect(
+        self,
+        upper: str,
+        stripped_line: str,
+        current_division: str,
+    ) -> list[str] | None:
+        if BIND_STATEMENT_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=f"*DB2: Removed IDMS BIND statement: {stripped_line}",
+                current_division=current_division,
+            )
+
+        if READY_PATTERN.search(upper) or USAGE_MODE_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=f"*DB2: Removed IDMS usage/READY statement: {stripped_line}",
+                current_division=current_division,
+            )
+
+        if CONNECT_STATEMENT_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=f"*DB2: Removed IDMS CONNECT statement: {stripped_line}",
+                current_division=current_division,
+            )
+
+        if DISCONNECT_STATEMENT_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=f"*DB2: Removed IDMS DISCONNECT statement: {stripped_line}",
+                current_division=current_division,
+            )
+
+        return None
+
+    def _convert_status_abort_perform(
+        self,
+        upper: str,
+        stripped_line: str,
+        current_division: str,
+    ) -> list[str] | None:
+        if IDMS_STATUS_PERFORM_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=(
+                    f"*DB2: Removed IDMS status/abort paragraph call: "
+                    f"{stripped_line}"
+                ),
+                current_division=current_division,
+            )
+
+        if IDMS_ABORT_PERFORM_PATTERN.search(upper):
+            return self._removed_idms_executable_lines(
+                message=(
+                    f"*DB2: Removed IDMS status/abort paragraph call: "
+                    f"{stripped_line}"
+                ),
+                current_division=current_division,
+            )
 
         return None
 
@@ -178,7 +249,6 @@ class IdmsStatementTransformer:
         stripped_line: str,
     ) -> list[str] | None:
         match = ON_DB_REC_NOT_FOUND_PATTERN.match(stripped_line)
-
         if not match:
             return None
 
@@ -187,13 +257,13 @@ class IdmsStatementTransformer:
         if not statement:
             return [
                 "IF SQLCODE = 100",
-                "    CONTINUE",
+                "   CONTINUE",
                 "END-IF.",
             ]
 
         return [
             "IF SQLCODE = 100",
-            f"    {statement}",
+            f"   {statement}",
             "END-IF.",
         ]
 
@@ -205,7 +275,6 @@ class IdmsStatementTransformer:
         sql_error_paragraph: str,
     ) -> list[str] | None:
         match = OBTAIN_CALC_PATTERN.search(upper)
-
         if not match:
             match = OBTAIN_CALC_REVERSED_PATTERN.search(upper)
 
@@ -216,18 +285,12 @@ class IdmsStatementTransformer:
 
         if current_division != "PROCEDURE":
             return [
-                f"* DB2: OBTAIN CALC ignored outside PROCEDURE DIVISION: {stripped_line}",
+                f"*DB2: OBTAIN CALC ignored outside PROCEDURE DIVISION: {stripped_line}",
             ]
 
-        return [
-            f"* DB2: Converted OBTAIN CALC for {record}.",
-            *self.sql_generator.select_by_key(record),
-            "IF SQLCODE NOT = 0 AND SQLCODE NOT = 100",
-            f"    PERFORM {sql_error_paragraph}.",
-            "END-IF.",
-        ]
+        return self.sql_generator.select_by_key(record)
 
-    def _convert_obtain_set(
+    def _convert_obtain_first_next(
         self,
         upper: str,
         stripped_line: str,
@@ -238,23 +301,43 @@ class IdmsStatementTransformer:
         if not match:
             return None, ""
 
-        mode = match.group("mode").upper()
-        record = match.group("record").upper()
-        set_name = match.group("set").upper()
+        record = NameNormalizer.normalize(match.group("record"))
+        set_name = NameNormalizer.normalize(match.group("set"))
 
         if current_division != "PROCEDURE":
             return [
-                f"* DB2: OBTAIN {mode} ignored outside PROCEDURE DIVISION: {stripped_line}",
+                f"*DB2: OBTAIN ignored outside PROCEDURE DIVISION: {stripped_line}",
             ], ""
 
-        table = self.table_name_resolver.table_for_record(record)
-        cursor_name = self.cursor_name_resolver.cursor_name_from_table(table)
+        cursor_name = self.cursor_name_resolver.cursor_name_from_table(
+            self.table_name_resolver.table_for_record(record)
+        )
+
+        if "FIRST" in upper:
+            return [
+                f"*DB2: Converted OBTAIN FIRST {record} WITHIN {set_name}.",
+                f"PERFORM OPEN-{cursor_name}.",
+                f"PERFORM FETCH-{cursor_name}.",
+            ], set_name
 
         return [
-            f"* DB2: Converted OBTAIN {mode} {record} WITHIN {set_name}.",
-            f"PERFORM OPEN-{cursor_name}.",
+            f"*DB2: Converted OBTAIN NEXT {record} WITHIN {set_name}.",
             f"PERFORM FETCH-{cursor_name}.",
         ], set_name
+
+    def _convert_find_current(
+        self,
+        upper: str,
+        stripped_line: str,
+        current_division: str,
+    ) -> list[str] | None:
+        if not FIND_CURRENT_PATTERN.search(upper):
+            return None
+
+        return self._removed_idms_executable_lines(
+            message=f"*DB2: Removed IDMS FIND CURRENT statement: {stripped_line}",
+            current_division=current_division,
+        )
 
     def _convert_find_first(
         self,
@@ -267,28 +350,19 @@ class IdmsStatementTransformer:
         if not match:
             return None, ""
 
-        record = (match.group("record") or "").upper()
-        set_name = match.group("set").upper()
+        record = NameNormalizer.normalize(match.group("record"))
+        set_name = NameNormalizer.normalize(match.group("set"))
 
         if current_division != "PROCEDURE":
             return [
-                f"* DB2: FIND FIRST ignored outside PROCEDURE DIVISION: {stripped_line}",
-            ], ""
-
-        if not record:
-            self.messages.append(
-                f"FIND FIRST WITHIN {set_name} needs record inference from source code or mapping."
-            )
-            return [
-                f"* DB2: FIND FIRST WITHIN {set_name} could not be converted because record name was not found.",
-                "CONTINUE.",
+                f"*DB2: FIND FIRST ignored outside PROCEDURE DIVISION: {stripped_line}",
             ], ""
 
         table = self.table_name_resolver.table_for_record(record)
         cursor_name = self.cursor_name_resolver.cursor_name_from_table(table)
 
         return [
-            f"* DB2: Converted FIND FIRST {record} WITHIN {set_name}.",
+            f"*DB2: Converted FIND FIRST {record} WITHIN {set_name}.",
             f"PERFORM OPEN-{cursor_name}.",
             f"PERFORM FETCH-{cursor_name}.",
         ], set_name
@@ -314,16 +388,10 @@ class IdmsStatementTransformer:
 
             if current_division != "PROCEDURE":
                 return [
-                    f"* DB2: {operation_name} ignored outside PROCEDURE DIVISION: {stripped_line}",
+                    f"*DB2: {operation_name} ignored outside PROCEDURE DIVISION: {stripped_line}",
                 ]
 
-            return [
-                f"* DB2: Converted {operation_name} for {record}.",
-                *generator_method(record),
-                "IF SQLCODE NOT = 0",
-                f"    PERFORM {sql_error_paragraph}.",
-                "END-IF.",
-            ]
+            return generator_method(record)
 
         return None
 
@@ -340,7 +408,10 @@ class IdmsStatementTransformer:
         self,
         upper: str,
     ) -> bool:
-        return any(pattern.search(upper) for pattern in IDMS_DECLARATIVE_OR_CONTROL_PATTERNS)
+        return any(
+            pattern.search(upper)
+            for pattern in IDMS_DECLARATIVE_OR_CONTROL_PATTERNS
+        )
 
     def _removed_idms_executable_lines(
         self,

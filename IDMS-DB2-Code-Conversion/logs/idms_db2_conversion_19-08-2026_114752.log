@@ -1,0 +1,19 @@
+19-08-2026 11:47:52 | INFO | idms_db2_update_conversion | Logger initialized.
+19-08-2026 11:47:52 | INFO | idms_db2_update_conversion | Log file: C:\VSCode\IDMS-DB2-CC-New\IDMS-DB2-Code-Conversion\logs\idms_db2_conversion_19-08-2026_114752.log
+19-08-2026 11:47:52 | INFO | idms_db2_update_conversion | START LOAD INPUTS
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Sheet Mapping file: C:\S\S-Input\Excel_Sheet_mapping.csv
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Sheet Mapping rows: 840
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN file count: 3
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 1: C:\S\S-Input\DCLGENS_BEFF.txt
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 1 text length: 3882
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 2: C:\S\S-Input\DCLGENS_BFAR.txt
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 2 text length: 7344
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 3: C:\S\S-Input\DCLGENS_EVEF.txt
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN 3 text length: 3035
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | DCLGEN total columns: 89
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Copybook file count: 1
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Copybook 1: C:\S\S-Input\Copybook.txt
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Copybook 1 text length: 115952
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | Copybook total fields: 1
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | IDMS COBOL source file: C:\S\S-Input\Update.txt
+19-08-2026 11:47:54 | INFO | idms_db2_update_conversion | IDMS COBOL source text length: 14764
