@@ -32,7 +32,12 @@ def initialize_session_state() -> None:
 
     for key, value in defaults.items():
         if key not in st.session_state:
-            st.session_state[key] = value
+            if isinstance(value, list):
+                st.session_state[key] = []
+            elif isinstance(value, dict):
+                st.session_state[key] = {}
+            else:
+                st.session_state[key] = value
 
 
 def render_main_page() -> None:
@@ -41,9 +46,6 @@ def render_main_page() -> None:
     tabs = st.tabs(
         [
             "Main",
-            "Metadata Overview",
-            "Column Names",
-            "Sets",
             "Sheet Mapping Rows",
             "Generated DB2 COBOL",
             "Validation",
@@ -55,24 +57,15 @@ def render_main_page() -> None:
         render_main_tab()
 
     with tabs[1]:
-        render_metadata_overview_tab()
-
-    with tabs[2]:
-        render_column_names_tab()
-
-    with tabs[3]:
-        render_sets_tab()
-
-    with tabs[4]:
         render_sheet_mapping_rows_tab()
 
-    with tabs[5]:
+    with tabs[2]:
         render_generated_cobol_tab()
 
-    with tabs[6]:
+    with tabs[3]:
         render_validation_tab()
 
-    with tabs[7]:
+    with tabs[4]:
         render_diagnostics_tab()
 
 
@@ -146,6 +139,38 @@ def render_main_tab() -> None:
             generate_db2_cobol(target_program_id=target_program_id)
 
     render_current_status()
+    render_main_download_section()
+
+
+def render_main_download_section() -> None:
+    st.markdown("## Download Generated Output")
+
+    if not st.session_state.generated or not st.session_state.converted_cobol:
+        st.info("Generate DB2 COBOL to enable download.")
+        return
+
+    st.success("Generated DB2 COBOL is ready for download.")
+
+    st.caption(
+        f"Output file name: `{st.session_state.converted_cobol_file_name}`"
+    )
+
+    st.download_button(
+        label="Download Generated DB2 COBOL",
+        data=st.session_state.converted_cobol,
+        file_name=st.session_state.converted_cobol_file_name,
+        mime="text/plain",
+        type="primary",
+        key="main_download_generated_cobol",
+    )
+
+    with st.expander("Preview Generated DB2 COBOL", expanded=False):
+        st.text_area(
+            "Generated DB2 COBOL Preview",
+            value=st.session_state.converted_cobol,
+            height=500,
+            key="main_generated_cobol_preview",
+        )
 
 
 def load_and_analyze_inputs(
@@ -154,8 +179,8 @@ def load_and_analyze_inputs(
     copybook_files,
     idms_cobol_source_file,
 ) -> None:
-    diagnostics = []
-    uploaded_file_names = {}
+    diagnostics: list[str] = []
+    uploaded_file_names: dict[str, object] = {}
 
     file_loader = FileLoader()
     sheet_mapping_parser = SheetMappingParser()
@@ -165,6 +190,10 @@ def load_and_analyze_inputs(
     sheet_rows = []
     dclgen_columns = []
     copybook_fields = []
+    idms_cobol_text = ""
+    idms_cobol_source_name = ""
+
+    diagnostics.append("START LOAD INPUTS")
 
     if sheet_mapping_file is None:
         diagnostics.append("Sheet Mapping file not uploaded.")
@@ -172,59 +201,80 @@ def load_and_analyze_inputs(
         uploaded_file_names["sheet_mapping_file"] = str(sheet_mapping_file.name or "")
 
         try:
-            sheet_rows = sheet_mapping_parser.parse(sheet_mapping_file)
+            sheet_rows = sheet_mapping_parser.parse_uploaded_file(sheet_mapping_file)
             diagnostics.append(f"Sheet Mapping uploaded: {sheet_mapping_file.name}")
             diagnostics.append(f"Sheet Mapping parsed rows: {len(sheet_rows)}")
+
+            if hasattr(sheet_mapping_parser, "diagnostics"):
+                diagnostics.extend(sheet_mapping_parser.diagnostics)
+
         except Exception as exc:
             diagnostics.append(f"Sheet Mapping parse failed: {exc}")
             sheet_rows = []
 
     dclgen_file_names = []
+    dclgen_texts = []
 
     if not dclgen_files:
         diagnostics.append("DCLGEN file not uploaded.")
     else:
-        dclgen_text_parts = []
+        diagnostics.append(f"DCLGEN file count: {len(dclgen_files)}")
 
-        for file in dclgen_files:
+        for index, file in enumerate(dclgen_files, start=1):
             file_name = str(file.name or "")
             dclgen_file_names.append(file_name)
 
             try:
                 text = file_loader.read_uploaded_text(file)
-                diagnostics.append(f"DCLGEN uploaded: {file_name}")
-                diagnostics.append(f"DCLGEN text length for {file_name}: {len(text)}")
-                dclgen_text_parts.append(text)
+                dclgen_texts.append(text)
+                diagnostics.append(f"DCLGEN {index}: {file_name}")
+                diagnostics.append(f"DCLGEN {index} text length: {len(text)}")
+
             except Exception as exc:
                 diagnostics.append(f"DCLGEN read failed for {file_name}: {exc}")
 
         uploaded_file_names["dclgen_files"] = dclgen_file_names
 
-        dclgen_text = "\n".join(dclgen_text_parts)
-
         try:
-            dclgen_columns = dclgen_parser.parse(dclgen_text)
+            if hasattr(dclgen_parser, "parse_many_texts"):
+                dclgen_columns = dclgen_parser.parse_many_texts(dclgen_texts)
+            else:
+                dclgen_columns = []
+
+                for index, text in enumerate(dclgen_texts, start=1):
+                    parsed_columns = dclgen_parser.parse(
+                        text=text,
+                        source_label=f"DCLGEN file {index}",
+                    )
+                    dclgen_columns.extend(parsed_columns)
+
             diagnostics.append(f"DCLGEN parsed columns: {len(dclgen_columns)}")
+
+            if hasattr(dclgen_parser, "diagnostics"):
+                diagnostics.extend(dclgen_parser.diagnostics)
+
         except Exception as exc:
             diagnostics.append(f"DCLGEN parse failed: {exc}")
             dclgen_columns = []
 
     copybook_file_names = []
+    copybook_text_parts = []
 
     if not copybook_files:
         diagnostics.append("Copybook file not uploaded. Continuing without copybook.")
     else:
-        copybook_text_parts = []
+        diagnostics.append(f"Copybook file count: {len(copybook_files)}")
 
-        for file in copybook_files:
+        for index, file in enumerate(copybook_files, start=1):
             file_name = str(file.name or "")
             copybook_file_names.append(file_name)
 
             try:
                 text = file_loader.read_uploaded_text(file)
-                diagnostics.append(f"Copybook uploaded: {file_name}")
-                diagnostics.append(f"Copybook text length for {file_name}: {len(text)}")
                 copybook_text_parts.append(text)
+                diagnostics.append(f"Copybook {index}: {file_name}")
+                diagnostics.append(f"Copybook {index} text length: {len(text)}")
+
             except Exception as exc:
                 diagnostics.append(f"Copybook read failed for {file_name}: {exc}")
 
@@ -232,15 +282,24 @@ def load_and_analyze_inputs(
 
         copybook_text = "\n".join(copybook_text_parts)
 
-        try:
-            copybook_fields = copybook_parser.parse(copybook_text)
-            diagnostics.append(f"Copybook parsed fields: {len(copybook_fields)}")
-        except Exception as exc:
-            diagnostics.append(f"Copybook parse failed: {exc}")
+        if copybook_text.strip():
+            try:
+                copybook_fields = copybook_parser.parse(
+                    text=copybook_text,
+                    source_label="Copybook files",
+                )
+            except TypeError:
+                copybook_fields = copybook_parser.parse(copybook_text)
+            except Exception as exc:
+                diagnostics.append(f"Copybook parse failed: {exc}")
+                copybook_fields = []
+        else:
             copybook_fields = []
 
-    idms_cobol_text = ""
-    idms_cobol_source_name = ""
+        diagnostics.append(f"Copybook parsed fields: {len(copybook_fields)}")
+
+        if hasattr(copybook_parser, "diagnostics"):
+            diagnostics.extend(copybook_parser.diagnostics)
 
     if idms_cobol_source_file is None:
         diagnostics.append("IDMS COBOL source file not uploaded.")
@@ -252,6 +311,7 @@ def load_and_analyze_inputs(
             idms_cobol_text = file_loader.read_uploaded_text(idms_cobol_source_file)
             diagnostics.append(f"IDMS COBOL source uploaded: {idms_cobol_source_name}")
             diagnostics.append(f"IDMS COBOL source text length: {len(idms_cobol_text)}")
+
         except Exception as exc:
             diagnostics.append(f"IDMS COBOL source read failed: {exc}")
             idms_cobol_text = ""
@@ -261,21 +321,48 @@ def load_and_analyze_inputs(
     st.session_state.copybook_fields = copybook_fields
     st.session_state.idms_cobol_text = idms_cobol_text
     st.session_state.idms_cobol_source_name = idms_cobol_source_name
+
     st.session_state.converted_cobol = ""
     st.session_state.converted_cobol_file_name = "converted_db2_cobol.cbl"
     st.session_state.validation_messages = []
     st.session_state.operations = []
     st.session_state.generated = False
-    st.session_state.loaded = True
+
     st.session_state.diagnostics = diagnostics
     st.session_state.uploaded_file_names = uploaded_file_names
 
-    st.success("Inputs loaded and analyzed.")
+    required_inputs_loaded = (
+        bool(sheet_rows)
+        and bool(dclgen_columns)
+        and bool(idms_cobol_text.strip())
+    )
+
+    st.session_state.loaded = required_inputs_loaded
+
+    if required_inputs_loaded:
+        st.success("Inputs loaded and analyzed.")
+    else:
+        st.warning(
+            "Inputs were processed, but one or more required inputs are missing or parsed as empty. "
+            "Review the Diagnostics tab."
+        )
 
 
 def generate_db2_cobol(target_program_id: str) -> None:
     if not st.session_state.loaded:
-        st.warning("Load and analyze inputs before generating DB2 COBOL.")
+        st.warning("Load and analyze valid inputs before generating DB2 COBOL.")
+        return
+
+    if not st.session_state.sheet_mapping_rows:
+        st.error("Sheet Mapping rows are empty. Reload Sheet Mapping input.")
+        return
+
+    if not st.session_state.dclgen_columns:
+        st.error("DCLGEN columns are empty. Reload DCLGEN input.")
+        return
+
+    if not st.session_state.idms_cobol_text.strip():
+        st.error("IDMS COBOL source is empty. Reload COBOL input.")
         return
 
     service = ConversionService()
@@ -291,35 +378,41 @@ def generate_db2_cobol(target_program_id: str) -> None:
         )
     )
 
-    st.session_state.converted_cobol = result.converted_cobol
-    st.session_state.validation_messages = result.validation_messages
-    st.session_state.operations = result.operations
+    st.session_state.converted_cobol = result.converted_cobol or ""
+    st.session_state.validation_messages = result.validation_messages or []
+    st.session_state.operations = result.operations or []
+
     st.session_state.converted_cobol_file_name = build_converted_cobol_file_name(
         target_program_id=target_program_id,
         source_file_name=st.session_state.idms_cobol_source_name,
     )
-    st.session_state.generated = True
 
-    st.success("DB2 COBOL generation completed.")
+    st.session_state.generated = bool(st.session_state.converted_cobol)
+
+    if st.session_state.generated:
+        st.success("DB2 COBOL generated. Download is now available in the Main tab.")
+    else:
+        st.warning(
+            "DB2 COBOL was not generated. Review the Validation and Diagnostics tabs."
+        )
 
 
 def build_converted_cobol_file_name(
     target_program_id: str,
     source_file_name: str,
 ) -> str:
-    target = sanitize_file_stem(target_program_id)
+    target_stem = sanitize_file_stem(target_program_id)
 
-    if target:
-        return f"{target}.cbl"
+    if target_stem:
+        return f"{target_stem}_db2.cbl"
 
-    source_stem = ""
+    source_name = str(source_file_name or "").strip()
 
-    if source_file_name:
-        source_stem = Path(source_file_name).stem
-        source_stem = sanitize_file_stem(source_stem)
+    if source_name:
+        source_stem = sanitize_file_stem(Path(source_name).stem)
 
-    if source_stem:
-        return f"{source_stem}_db2.cbl"
+        if source_stem:
+            return f"{source_stem}_db2.cbl"
 
     return "converted_db2_cobol.cbl"
 
@@ -354,67 +447,10 @@ def render_current_status() -> None:
         st.metric("IDMS COBOL Length", len(st.session_state.idms_cobol_text))
 
     if st.session_state.loaded:
-        st.success("Inputs loaded. Review metadata and diagnostics before generating.")
+        st.success("Inputs loaded. Review diagnostics before generating.")
 
     if st.session_state.generated:
-        st.success("DB2 COBOL generated. Open the Generated DB2 COBOL tab to download.")
-
-
-def render_metadata_overview_tab() -> None:
-    st.markdown("## Metadata Overview")
-
-    metadata_service = MetadataService()
-
-    summaries = metadata_service.record_summaries(
-        st.session_state.sheet_mapping_rows,
-    )
-
-    if summaries:
-        st.dataframe(
-            summaries,
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("No metadata available. Upload Sheet Mapping first.")
-
-
-def render_column_names_tab() -> None:
-    st.markdown("## Column Names")
-
-    metadata_service = MetadataService()
-
-    rows = metadata_service.column_rows(
-        st.session_state.sheet_mapping_rows,
-    )
-
-    if rows:
-        st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("No column rows available. Upload Sheet Mapping first.")
-
-
-def render_sets_tab() -> None:
-    st.markdown("## Sets")
-
-    metadata_service = MetadataService()
-
-    rows = metadata_service.relationship_summaries(
-        st.session_state.sheet_mapping_rows,
-    )
-
-    if rows:
-        st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("No relationship rows available. Upload Sheet Mapping first.")
+        st.success("DB2 COBOL generated. Download is available below.")
 
 
 def render_sheet_mapping_rows_tab() -> None:
@@ -453,12 +489,14 @@ def render_generated_cobol_tab() -> None:
         file_name=st.session_state.converted_cobol_file_name,
         mime="text/plain",
         type="primary",
+        key="generated_tab_download_generated_cobol",
     )
 
     st.text_area(
         "Final DB2 COBOL Code",
         value=st.session_state.converted_cobol,
         height=760,
+        key="generated_tab_final_db2_cobol_code",
     )
 
 
