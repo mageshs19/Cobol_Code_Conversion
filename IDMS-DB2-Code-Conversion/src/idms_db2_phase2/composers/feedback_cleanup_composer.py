@@ -88,7 +88,8 @@ class FeedbackCleanupComposer:
     FETCH_UNTIL_EOC_FULL_SW_PATTERN = re.compile(
         r"^(?P<prefix>\s*PERFORM\s+)"
         r"(?P<fetch>[0-9]+-FETCH-[A-Z0-9-]+)"
-        r"\s+UNTIL\s+(?P<eoc>[A-Z0-9-]+-EOC)\s+OR\s+SW-STATUS-D\s*=?\s*['\"]?Y['\"]?\.?\s*$",
+        r"\s+UNTIL\s+(?P<eoc>[A-Z0-9-]+-EOC)"
+        r"\s+OR\s+SW-STATUS-D\s*=?\s*['\"]?Y['\"]?\.?\s*$",
         flags=re.IGNORECASE,
     )
 
@@ -123,17 +124,20 @@ class FeedbackCleanupComposer:
     )
 
     DB2_DATE_MOVE_START_PATTERN = re.compile(
-        r"^\s*MOVE\s+(?P<field>(?:DA|DT)-[A-Z0-9-]+)\s+OF\s+(?P<group>DCL[A-Z0-9-]+)\s*$",
+        r"^\s*MOVE\s+(?P<field>(?:DA|DT)-[A-Z0-9-]+)\s+OF\s+"
+        r"(?P<group>DCL[A-Z0-9-]+)\s*$",
         flags=re.IGNORECASE,
     )
 
     DB2_DATE_MOVE_ONE_LINE_PATTERN = re.compile(
-        r"^\s*MOVE\s+(?P<field>(?:DA|DT)-[A-Z0-9-]+)\s+OF\s+(?P<group>DCL[A-Z0-9-]+)\s+TO\s+(?P<target>UIT-[A-Z0-9-]+)\.?\s*$",
+        r"^\s*MOVE\s+(?P<field>(?:DA|DT)-[A-Z0-9-]+)\s+OF\s+"
+        r"(?P<group>DCL[A-Z0-9-]+)\s+TO\s+"
+        r"(?P<target>(?:UIT|OUT)-(?:DA|DT)-[A-Z0-9-]+)\.?\s*$",
         flags=re.IGNORECASE,
     )
 
     TO_UIT_DATE_FIELD_PATTERN = re.compile(
-        r"^\s*TO\s+(?P<target>UIT-[A-Z0-9-]*(?:DA|DATE)[A-Z0-9-]*)\.?\s*$",
+        r"^\s*TO\s+(?P<target>(?:UIT|OUT)-(?:DA|DT)-[A-Z0-9-]+)\.?\s*$",
         flags=re.IGNORECASE,
     )
 
@@ -720,33 +724,16 @@ class FeedbackCleanupComposer:
             logical = self._logical(line)
 
             one_line = self.DB2_DATE_MOVE_ONE_LINE_PATTERN.match(logical)
+
             if one_line:
                 field = one_line.group("field")
                 group = one_line.group("group")
                 target = one_line.group("target")
 
-                output.extend(
-                    self._date_conversion_lines(
-                        leading=self._leading_spaces(line),
-                        field=field,
-                        group=group,
-                        target=target,
-                    )
-                )
-                changed = True
-                index += 1
-                continue
-
-            start_match = self.DB2_DATE_MOVE_START_PATTERN.match(logical)
-            if start_match and index + 1 < len(lines):
-                next_logical = self._logical(lines[index + 1])
-                target_match = self.TO_UIT_DATE_FIELD_PATTERN.match(next_logical)
-
-                if target_match:
-                    field = start_match.group("field")
-                    group = start_match.group("group")
-                    target = target_match.group("target")
-
+                if self._should_generate_output_date_conversion(
+                    field_name=field,
+                    target_name=target,
+                ):
                     output.extend(
                         self._date_conversion_lines(
                             leading=self._leading_spaces(line),
@@ -756,8 +743,35 @@ class FeedbackCleanupComposer:
                         )
                     )
                     changed = True
-                    index += 2
+                    index += 1
                     continue
+
+            start_match = self.DB2_DATE_MOVE_START_PATTERN.match(logical)
+
+            if start_match and index + 1 < len(lines):
+                next_logical = self._logical(lines[index + 1])
+                target_match = self.TO_UIT_DATE_FIELD_PATTERN.match(next_logical)
+
+                if target_match:
+                    field = start_match.group("field")
+                    group = start_match.group("group")
+                    target = target_match.group("target")
+
+                    if self._should_generate_output_date_conversion(
+                        field_name=field,
+                        target_name=target,
+                    ):
+                        output.extend(
+                            self._date_conversion_lines(
+                                leading=self._leading_spaces(line),
+                                field=field,
+                                group=group,
+                                target=target,
+                            )
+                        )
+                        changed = True
+                        index += 2
+                        continue
 
             output.append(line)
             index += 1
@@ -769,6 +783,41 @@ class FeedbackCleanupComposer:
 
         return "\n".join(output).rstrip() + "\n"
 
+    def _should_generate_output_date_conversion(
+        self,
+        field_name: str,
+        target_name: str,
+    ) -> bool:
+        """
+        Return True only for DB2 date-host to output-date-field conversion.
+
+        This prevents date ZEROES/SPACES logic from being generated for:
+        - non-date output fields
+        - DB2 DCLGEN host variables
+        - update host moves
+        - unrelated MOVE statements
+        """
+
+        field = str(field_name or "").strip().upper()
+        target = str(target_name or "").strip().upper()
+
+        if not field or not target:
+            return False
+
+        if not field.startswith(("DA-", "DT-")):
+            return False
+
+        if not target.startswith(("UIT-DA-", "UIT-DT-", "OUT-DA-", "OUT-DT-")):
+            return False
+
+        if " OF DCL" in target:
+            return False
+
+        if target.startswith("DCL"):
+            return False
+
+        return True
+
     def _date_conversion_lines(
         self,
         leading: str,
@@ -779,6 +828,12 @@ class FeedbackCleanupComposer:
         field_name = NameNormalizer.to_cobol(field)
         group_name = NameNormalizer.to_cobol(group)
         target_name = NameNormalizer.to_cobol(target)
+
+        if not self._should_generate_output_date_conversion(
+            field_name=field_name,
+            target_name=target_name,
+        ):
+            return []
 
         output: list[str] = []
 
