@@ -4,20 +4,24 @@ DB2 date comparison composer.
 This composer realigns DB2 date host fields before comparing them with
 numeric COBOL date fields such as PARMDATE.
 
-The conversion template is stored in:
-    rules/db2_date_conversion_rules.py
+It also ensures shared DB2 date helper Working-Storage is declared when
+generated update or retrieval logic uses shared date helper fields such as:
 
-This class is generic:
-- No program name is hardcoded.
-- No table name is hardcoded.
-- No DCLGEN group name is hardcoded.
-- No business field name is hardcoded.
-- DA-/DT- field names are detected from the COBOL being converted.
+- DA-CCYYMMDD
+- DA-CCYYMMDD-R
+- DA-DD-MM-CCYY
+
+No program name is hardcoded.
+No table name is hardcoded.
+No DCLGEN group name is hardcoded.
+No business field name is hardcoded.
 """
 
 from patterns.db2_date_patterns import (
     DATE_WORKING_STORAGE_MARKER_PATTERN,
     DB2_DATE_COMPARISON_PATTERN,
+    DB2_DATE_WORKING_STORAGE_BASE_PATTERN,
+    DB2_SHARED_DATE_HELPER_USAGE_PATTERN,
     LINKAGE_SECTION_PATTERN,
     PROCEDURE_DIVISION_PATTERN,
 )
@@ -35,6 +39,27 @@ from rules.db2_date_conversion_rules import (
 
 
 class Db2DateComparisonComposer:
+    """
+    Compose DB2 date comparison and shared date helper support.
+
+    Existing behavior:
+    - Detect DA-/DT- DCLGEN date fields compared with PARMDATE.
+    - Generate conversion logic.
+    - Add date helper Working-Storage.
+
+    Added generic behavior:
+    - If generated PROCEDURE DIVISION already contains shared date helper
+      usage, ensure the base Working-Storage date block exists.
+    - This covers update programs where DATE-YMD8 is converted to the DB2
+      external date host format without a comparison IF statement.
+
+    Safety behavior:
+    - If the base date Working-Storage already exists, add only missing
+      HELP-* date helper fields required by comparison conversion.
+    - Do not duplicate WS-DATUMVELDEN.
+    - Do not duplicate HELP-* fields.
+    """
+
     WS_MARKER = DB2_DATE_COMPARISON_WS_MARKER
 
     def compose(
@@ -47,16 +72,18 @@ class Db2DateComparisonComposer:
         lines = self._normalize_line_endings(text).splitlines()
 
         date_fields = self._date_fields_used_in_comparisons(lines)
-
-        if not date_fields:
-            return text.rstrip() + "\n"
-
-        lines = self._ensure_date_working_storage(
-            lines=lines,
-            date_fields=date_fields,
+        shared_helpers_used = self._shared_date_helpers_used_in_procedure(
+            lines
         )
 
-        lines = self._rewrite_date_comparisons(lines)
+        if date_fields or shared_helpers_used:
+            lines = self._ensure_date_working_storage(
+                lines=lines,
+                date_fields=date_fields,
+            )
+
+        if date_fields:
+            lines = self._rewrite_date_comparisons(lines)
 
         return "\n".join(lines).rstrip() + "\n"
 
@@ -82,7 +109,7 @@ class Db2DateComparisonComposer:
         for line in lines:
             logical = self._logical(line)
 
-            if logical.startswith("*") or logical.startswith("/"):
+            if self._is_comment_or_blank(logical):
                 continue
 
             match = DB2_DATE_COMPARISON_PATTERN.match(logical)
@@ -103,37 +130,199 @@ class Db2DateComparisonComposer:
 
         return output
 
+    def _shared_date_helpers_used_in_procedure(
+        self,
+        lines: list[str],
+    ) -> bool:
+        in_procedure_division = False
+
+        for line in lines:
+            logical = self._logical(line)
+
+            if not logical:
+                continue
+
+            if PROCEDURE_DIVISION_PATTERN.match(logical):
+                in_procedure_division = True
+                continue
+
+            if not in_procedure_division:
+                continue
+
+            if self._is_comment_or_blank(logical):
+                continue
+
+            if DB2_SHARED_DATE_HELPER_USAGE_PATTERN.search(logical):
+                return True
+
+        return False
+
     def _ensure_date_working_storage(
         self,
         lines: list[str],
         date_fields: list[str],
     ) -> list[str]:
-        if self._has_date_working_storage(lines):
+        """
+        Ensure DB2 date Working-Storage exists.
+
+        Behavior:
+        - If no date Working-Storage exists, insert the full base block.
+        - If date Working-Storage already exists, add only missing HELP-* fields.
+        - Update-only flows normally pass no date_fields, so only the base block
+          is required.
+        - Retrieval/date comparison flows may require HELP-* fields.
+        """
+
+        if not self._has_date_working_storage(lines):
+            block = self._date_working_storage_block(date_fields)
+            insert_index = self._date_working_storage_insert_index(lines)
+
+            if insert_index < 0:
+                return block + [""] + lines
+
+            return lines[:insert_index] + block + [""] + lines[insert_index:]
+
+        return self._ensure_missing_date_helper_fields(
+            lines=lines,
+            date_fields=date_fields,
+        )
+
+    def _ensure_missing_date_helper_fields(
+        self,
+        lines: list[str],
+        date_fields: list[str],
+    ) -> list[str]:
+        """
+        Add missing HELP-* date fields when WS-DATUMVELDEN already exists.
+
+        This prevents a retrieval/date-comparison regression where the base
+        date block exists but a newly required HELP-* field is missing.
+        """
+
+        if not date_fields:
             return lines
 
-        block = self._date_working_storage_block(date_fields)
+        missing_helpers: list[str] = []
 
-        insert_index = self._date_working_storage_insert_index(lines)
+        for field_name in date_fields:
+            helper = self._helper_name(field_name)
+
+            if self._helper_declared(
+                lines=lines,
+                helper=helper,
+            ):
+                continue
+
+            missing_helpers.append(helper)
+
+        if not missing_helpers:
+            return lines
+
+        helper_lines = [
+            DB2_DATE_HELPER_FIELD_TEMPLATE.format(
+                helper=helper,
+            )
+            for helper in missing_helpers
+        ]
+
+        insert_index = self._date_helper_insert_index(lines)
 
         if insert_index < 0:
-            return block + [""] + lines
+            return lines + helper_lines
 
-        return lines[:insert_index] + block + [""] + lines[insert_index:]
+        return lines[:insert_index] + helper_lines + lines[insert_index:]
+
+    def _helper_declared(
+        self,
+        lines: list[str],
+        helper: str,
+    ) -> bool:
+        """
+        Return True only when the HELP-* field is declared before PROCEDURE DIVISION.
+
+        Important:
+        - Do not treat a PROCEDURE DIVISION usage as a declaration.
+        - This avoids missing declaration false positives on reruns.
+        """
+
+        helper_upper = str(helper or "").strip().upper()
+
+        if not helper_upper:
+            return True
+
+        for line in lines:
+            logical = self._logical(line)
+
+            if PROCEDURE_DIVISION_PATTERN.match(logical):
+                return False
+
+            if helper_upper in logical.upper():
+                return True
+
+        return False
+
+    def _date_helper_insert_index(
+        self,
+        lines: list[str],
+    ) -> int:
+        """
+        Return index where missing HELP-* fields should be inserted.
+
+        Preferred placement:
+        - Inside the existing date Working-Storage area.
+        - Before LINKAGE SECTION.
+        - Before PROCEDURE DIVISION when LINKAGE SECTION is absent.
+        - Before the next 01-level item after WS-DATUMVELDEN.
+        """
+
+        ws_datumvelden_seen = False
+
+        for index, line in enumerate(lines):
+            logical = self._logical(line)
+            upper_logical = logical.upper()
+
+            if upper_logical.startswith("01 WS-DATUMVELDEN"):
+                ws_datumvelden_seen = True
+                continue
+
+            if not ws_datumvelden_seen:
+                continue
+
+            if LINKAGE_SECTION_PATTERN.match(logical):
+                return index
+
+            if PROCEDURE_DIVISION_PATTERN.match(logical):
+                return index
+
+            if upper_logical.startswith("01 "):
+                return index
+
+        return -1
 
     def _has_date_working_storage(
         self,
         lines: list[str],
     ) -> bool:
+        in_procedure_division = False
+
         for line in lines:
+            logical = self._logical(line)
+
             if DATE_WORKING_STORAGE_MARKER_PATTERN.search(line):
                 return True
 
-            logical = self._logical(line).upper()
+            if PROCEDURE_DIVISION_PATTERN.match(logical):
+                in_procedure_division = True
 
-            if logical.startswith("01 WS-DATUMVELDEN"):
+            if in_procedure_division:
+                continue
+
+            upper_logical = logical.upper()
+
+            if upper_logical.startswith("01 WS-DATUMVELDEN"):
                 return True
 
-            if logical.startswith("01  WS-DATUMVELDEN"):
+            if DB2_DATE_WORKING_STORAGE_BASE_PATTERN.search(upper_logical):
                 return True
 
         return False
@@ -182,7 +371,7 @@ class Db2DateComparisonComposer:
         for line in lines:
             logical = self._logical(line)
 
-            if logical.startswith("*") or logical.startswith("/"):
+            if self._is_comment_or_blank(logical):
                 output.append(line)
                 continue
 
@@ -274,6 +463,7 @@ class Db2DateComparisonComposer:
     ) -> str:
         text = str(value or "").strip().upper()
         text = text.replace("_", "-")
+        text = text.rstrip(".")
 
         while " " in text:
             text = text.replace(" ", "")
@@ -283,39 +473,9 @@ class Db2DateComparisonComposer:
     def _leading_spaces_from_line(
         self,
         line: str,
-        default: str,
+        default: str = "",
     ) -> str:
-        text = str(line or "")
-
-        if self._is_fixed_format_line(text):
-            body = text[7:72]
-            return self._leading_spaces(body, default)
-
-        return self._leading_spaces(text, default)
-
-    def _is_fixed_format_line(
-        self,
-        line: str,
-    ) -> bool:
-        text = str(line or "")
-
-        if len(text) < 80:
-            return False
-
-        if not text[:6].isdigit():
-            return False
-
-        if not text[72:80].isdigit():
-            return False
-
-        return True
-
-    def _leading_spaces(
-        self,
-        text: str,
-        default: str,
-    ) -> str:
-        value = str(text or "")
+        value = str(line or "")
 
         if not value:
             return default
@@ -326,3 +486,14 @@ class Db2DateComparisonComposer:
             return default
 
         return value[:count]
+
+    def _is_comment_or_blank(
+        self,
+        logical: str,
+    ) -> bool:
+        stripped = str(logical or "").strip()
+
+        if not stripped:
+            return True
+
+        return stripped.startswith("*") or stripped.startswith("/")

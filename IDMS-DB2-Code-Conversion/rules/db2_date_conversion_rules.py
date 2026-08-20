@@ -22,10 +22,11 @@ DB2_DATE_COMPARISON_RULES = [
     "Generate date conversion only when a DA-/DT- DCLGEN host field is compared with PARMDATE.",
     "Generated helper field names are derived from the detected DB2 host field name.",
     "Date conversion logic must not hardcode program names, table names, record names, or business fields.",
+    "Initialize generated date helper fields before moving converted date values into them.",
 ]
 
 
-DB2_DATE_COMPARISON_WS_MARKER = "DB2 DATE COMPARISON WORKING STORAGE"
+DB2_DATE_COMPARISON_WS_MARKER = "DB2 DATE CONVERSION WORKING STORAGE"
 
 
 DB2_DATE_BASE_WORKING_STORAGE_LINES = [
@@ -61,7 +62,7 @@ DB2_DATE_HIGH_NUMERIC_LITERAL = "99999999"
 
 DB2_DATE_CONVERSION_LINE_TEMPLATES = [
     "{indent}MOVE ZEROES TO DA-CCYYMMDD",
-    "{indent}               {helper}",
+    "{indent}MOVE ZEROES TO {helper}",
     "{indent}MOVE {field_name} OF {group_name} TO DA-DD-MM-CCYY",
     "{indent}EVALUATE TRUE",
     "{indent} WHEN DA-DD-MM-CCYY = '{low_value}'",

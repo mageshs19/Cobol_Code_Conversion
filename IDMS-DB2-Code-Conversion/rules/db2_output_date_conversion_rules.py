@@ -24,6 +24,8 @@ The composer supplies dynamic values:
 DB2_OUTPUT_DATE_CONVERSION_RULES = [
     "DB2 date values must be realigned before moving to output date fields.",
     "Generate output date conversion only when a DA-/DT- DCLGEN host field is moved to an output date field.",
+    "Initialize shared DB2 date work fields before date realignment.",
+    "Clear the output date target before moving the converted date value.",
     "Do not hardcode program names, table names, DCLGEN group names, or business field names.",
     "Use shared date work fields when already generated in WORKING-STORAGE.",
 ]
@@ -34,6 +36,7 @@ DB2_OUTPUT_DATE_HIGH_NUMERIC_LITERAL = "99999999"
 
 DB2_OUTPUT_DATE_CONVERSION_LINE_TEMPLATES = [
     "{indent}MOVE ZEROES TO DA-CCYYMMDD",
+    "{indent}MOVE SPACES TO {target_name}",
     "{indent}MOVE {field_name} OF {group_name} TO DA-DD-MM-CCYY",
     "{indent}EVALUATE TRUE",
     "{indent} WHEN DA-DD-MM-CCYY = '{low_value}'",
