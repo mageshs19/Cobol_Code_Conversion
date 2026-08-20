@@ -16,7 +16,12 @@ class MappingRepository:
     - Sheet Mapping source-field metadata is used to resolve IDMS/copybook
       fields to DB2 columns.
 
-    This repository does not hardcode program, record, table, or field names.
+    Feedback-driven rules:
+    - Composite key means all PK / CALC key columns must be returned.
+    - FK / FOREIGN / relationship columns must never be returned as WHERE keys.
+    - UPDATE SET columns must not include key columns.
+    - UPDATE SET columns must include changed fields plus update audit fields.
+    - This repository does not hardcode program, record, table, or field names.
     """
 
     MIN_SOURCE_FIELD_SIMILARITY = 0.86
@@ -118,6 +123,7 @@ class MappingRepository:
 
             if not column:
                 continue
+
             if column in seen:
                 continue
 
@@ -153,32 +159,72 @@ class MappingRepository:
         """
         Return key columns based on Sheet Mapping key metadata.
 
-        This keeps older behavior by allowing IDMS CALC metadata as a fallback.
-        For strict DB2 primary-key-only handling, use
-        primary_key_columns_for_record().
+        Feedback rule:
+        - Include all DB2 PRIMARY / KEY columns.
+        - Include all IDMS CALC key columns.
+        - Preserve all composite-key fields.
+        - Exclude FK / FOREIGN / relationship columns.
+        """
+        return self.primary_key_columns_for_record(record_name)
+
+    def primary_key_columns_for_record(
+        self,
+        record_name: str,
+    ) -> list[str]:
+        """
+        Return all primary-key-style columns for DB2 WHERE clauses.
+
+        Feedback rule:
+        - If key is composite, include all mandatory PK / CALC key fields.
+        - Never include FK / FOREIGN / relationship fields.
+        - Preserve Sheet Mapping order.
+        - Do not return duplicate columns.
+
+        This intentionally includes IDMS CALC key metadata because IDMS CALC
+        records can map to composite DB2 keys.
         """
         output: list[str] = []
         seen: set[str] = set()
 
         for row in self.rows_for_record(record_name):
-            key_text = " ".join(
-                [
-                    str(row.idms_key or ""),
-                    str(row.db2_key or ""),
-                ]
-            ).upper()
+            idms_key = NameNormalizer.normalize(getattr(row, "idms_key", ""))
+            db2_key = NameNormalizer.normalize(getattr(row, "db2_key", ""))
+            relation = NameNormalizer.normalize(getattr(row, "relation", ""))
 
-            if (
-                "KEY" not in key_text
-                and "PRIMARY" not in key_text
-                and "CALC" not in key_text
-            ):
-                continue
-
-            column = NameNormalizer.normalize(row.new_db2_field_name)
+            column = NameNormalizer.normalize(
+                getattr(row, "new_db2_field_name", "")
+                or getattr(row, "cross_application_db2_field_name", "")
+            )
 
             if not column:
                 continue
+
+            key_text = " ".join(
+                [
+                    idms_key,
+                    db2_key,
+                    relation,
+                ]
+            )
+            padded_key_text = f" {key_text} "
+
+            if "FOREIGN" in key_text:
+                continue
+
+            if " FK " in padded_key_text:
+                continue
+
+            is_key_column = (
+                "PRIMARY" in db2_key
+                or db2_key == "KEY"
+                or "PRIMARY" in idms_key
+                or idms_key == "KEY"
+                or "CALC" in idms_key
+            )
+
+            if not is_key_column:
+                continue
+
             if column in seen:
                 continue
 
@@ -187,36 +233,47 @@ class MappingRepository:
 
         return output
 
-    def primary_key_columns_for_record(
+    def foreign_key_columns_for_record(
         self,
         record_name: str,
     ) -> list[str]:
         """
-        Return DB2 primary-key columns only.
+        Return FK / FOREIGN / relationship columns for a record.
 
-        This is stricter than key_columns_for_record and is used when feedback
-        requires DB2 primary-key-only WHERE clauses.
+        This is useful for validation and for ensuring FK fields are never
+        treated as UPDATE / DELETE / SELECT WHERE identity keys.
         """
         output: list[str] = []
         seen: set[str] = set()
 
         for row in self.rows_for_record(record_name):
-            db2_key = NameNormalizer.normalize(row.db2_key)
-            relation = NameNormalizer.normalize(row.relation)
+            db2_key = NameNormalizer.normalize(getattr(row, "db2_key", ""))
+            relation = NameNormalizer.normalize(getattr(row, "relation", ""))
 
-            if "FOREIGN" in relation:
+            text = " ".join(
+                [
+                    db2_key,
+                    relation,
+                ]
+            )
+            padded_text = f" {text} "
+
+            is_foreign = (
+                "FOREIGN" in text
+                or " FK " in padded_text
+            )
+
+            if not is_foreign:
                 continue
 
-            if "FOREIGN" in db2_key:
-                continue
-
-            if "PRIMARY" not in db2_key and db2_key != "KEY":
-                continue
-
-            column = NameNormalizer.normalize(row.new_db2_field_name)
+            column = NameNormalizer.normalize(
+                getattr(row, "new_db2_field_name", "")
+                or getattr(row, "cross_application_db2_field_name", "")
+            )
 
             if not column:
                 continue
+
             if column in seen:
                 continue
 
@@ -229,7 +286,7 @@ class MappingRepository:
         self,
         record_name: str,
     ) -> list[str]:
-        key_columns = set(self.key_columns_for_record(record_name))
+        key_columns = set(self.primary_key_columns_for_record(record_name))
         output: list[str] = []
         seen: set[str] = set()
 
@@ -238,8 +295,10 @@ class MappingRepository:
 
             if not column:
                 continue
+
             if column in key_columns:
                 continue
+
             if column in seen:
                 continue
 
@@ -260,10 +319,13 @@ class MappingRepository:
 
             if not column:
                 continue
+
             if column.startswith(self.INSERT_ONLY_AUDIT_PREFIXES):
                 continue
+
             if not column.startswith(self.UPDATE_AUDIT_PREFIXES):
                 continue
+
             if column in seen:
                 continue
 
@@ -280,19 +342,20 @@ class MappingRepository:
         """
         Return conservative UPDATE candidate columns.
 
-        Generic rule:
+        Feedback rule:
         - If changed_source_fields are supplied, resolve them through Sheet
           Mapping to DB2 columns.
-        - Exclude DB2 key columns from SET.
+        - Exclude all composite key columns from SET.
+        - Exclude FK / FOREIGN / relationship columns from SET unless they are
+          explicitly changed source fields and not key columns.
         - Add update audit columns only if present in Sheet Mapping.
         - Do not add TS_CREATE because it is insert-only.
         - Do not invent DB2 columns.
-
-        This method is required by UpdateSqlPlanResolver.
         """
         output: list[str] = []
         seen: set[str] = set()
-        key_columns = set(self.key_columns_for_record(record_name))
+
+        key_columns = set(self.primary_key_columns_for_record(record_name))
 
         for source_field in changed_source_fields or []:
             column = self.column_for_source_field(
@@ -303,10 +366,13 @@ class MappingRepository:
 
             if not column:
                 continue
+
             if column in key_columns:
                 continue
+
             if column.startswith(self.INSERT_ONLY_AUDIT_PREFIXES):
                 continue
+
             if column in seen:
                 continue
 
@@ -318,6 +384,10 @@ class MappingRepository:
 
             if not column:
                 continue
+
+            if column in key_columns:
+                continue
+
             if column in seen:
                 continue
 
@@ -354,6 +424,7 @@ class MappingRepository:
             rows=rows,
             source=source,
         )
+
         if exact:
             return exact
 
@@ -361,6 +432,7 @@ class MappingRepository:
             rows=rows,
             source=source,
         )
+
         if compact:
             return compact
 
@@ -368,6 +440,7 @@ class MappingRepository:
             rows=rows,
             source=source,
         )
+
         if similar:
             return similar
 
@@ -391,7 +464,9 @@ class MappingRepository:
         source: str,
     ) -> str:
         for row in rows:
-            column = NameNormalizer.normalize(row.new_db2_field_name)
+            column = NameNormalizer.normalize(
+                row.new_db2_field_name or row.cross_application_db2_field_name
+            )
 
             if not column:
                 continue
@@ -413,7 +488,9 @@ class MappingRepository:
             return ""
 
         for row in rows:
-            column = NameNormalizer.normalize(row.new_db2_field_name)
+            column = NameNormalizer.normalize(
+                row.new_db2_field_name or row.cross_application_db2_field_name
+            )
 
             if not column:
                 continue
@@ -452,7 +529,9 @@ class MappingRepository:
         best_score = 0.0
 
         for row in rows:
-            column = NameNormalizer.normalize(row.new_db2_field_name)
+            column = NameNormalizer.normalize(
+                row.new_db2_field_name or row.cross_application_db2_field_name
+            )
 
             if not column:
                 continue

@@ -35,7 +35,11 @@ class IdmsStatementTransformer:
     This transformer contains conversion logic only.
     Regex patterns live in patterns/idms_patterns.py.
 
-    Important:
+    Feedback-driven rules:
+    - OBTAIN CALC does not need to generate DB2 SELECT for update flow.
+    - Direct UPDATE is enough when the UPDATE WHERE has all composite
+      PK / CALC key fields.
+    - Original IDMS OBTAIN CALC must still be removed from final COBOL.
     - SqlGenerator methods already generate SQLCODE checks where required.
     - This transformer must not add duplicate SQLCODE wrappers around
       generated SQL blocks.
@@ -70,6 +74,7 @@ class IdmsStatementTransformer:
             upper=upper,
             stripped_line=stripped_line,
         )
+
         if declarative_result is not None:
             return declarative_result, ""
 
@@ -78,6 +83,7 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if finish_result is not None:
             return finish_result, ""
 
@@ -86,6 +92,7 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if bind_ready_result is not None:
             return bind_ready_result, ""
 
@@ -94,12 +101,14 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if status_result is not None:
             return status_result, ""
 
         on_not_found_result = self._convert_on_db_rec_not_found(
             stripped_line=stripped_line,
         )
+
         if on_not_found_result is not None:
             return on_not_found_result, ""
 
@@ -109,6 +118,7 @@ class IdmsStatementTransformer:
             current_division=current_division,
             sql_error_paragraph=sql_error_paragraph,
         )
+
         if obtain_calc_result is not None:
             return obtain_calc_result, ""
 
@@ -117,6 +127,7 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if obtain_first_next_result is not None:
             return obtain_first_next_result, opened_set
 
@@ -125,6 +136,7 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if find_current_result is not None:
             return find_current_result, ""
 
@@ -133,6 +145,7 @@ class IdmsStatementTransformer:
             stripped_line=stripped_line,
             current_division=current_division,
         )
+
         if find_first_result is not None:
             return find_first_result, opened_set
 
@@ -142,6 +155,7 @@ class IdmsStatementTransformer:
             current_division=current_division,
             sql_error_paragraph=sql_error_paragraph,
         )
+
         if store_result is not None:
             return store_result, ""
 
@@ -249,6 +263,7 @@ class IdmsStatementTransformer:
         stripped_line: str,
     ) -> list[str] | None:
         match = ON_DB_REC_NOT_FOUND_PATTERN.match(stripped_line)
+
         if not match:
             return None
 
@@ -274,21 +289,34 @@ class IdmsStatementTransformer:
         current_division: str,
         sql_error_paragraph: str,
     ) -> list[str] | None:
+        """
+        Convert OBTAIN CALC.
+
+        Feedback rule:
+        - DB2 SELECT before UPDATE is not required.
+        - Direct UPDATE with composite key WHERE clause is enough.
+        - Original executable IDMS statement must be removed.
+        """
         match = OBTAIN_CALC_PATTERN.search(upper)
+
         if not match:
             match = OBTAIN_CALC_REVERSED_PATTERN.search(upper)
 
         if not match:
             return None
 
-        record = match.group("record").upper()
+        record = NameNormalizer.normalize(match.group("record"))
 
         if current_division != "PROCEDURE":
             return [
                 f"*DB2: OBTAIN CALC ignored outside PROCEDURE DIVISION: {stripped_line}",
             ]
 
-        return self.sql_generator.select_by_key(record)
+        return [
+            f"*DB2: Removed OBTAIN CALC SELECT for {NameNormalizer.to_cobol(record)}.",
+            "*DB2: Direct UPDATE will use mapped composite key WHERE clause.",
+            "CONTINUE.",
+        ]
 
     def _convert_obtain_first_next(
         self,
@@ -384,7 +412,7 @@ class IdmsStatementTransformer:
             if not match:
                 continue
 
-            record = match.group("record").upper()
+            record = NameNormalizer.normalize(match.group("record"))
 
             if current_division != "PROCEDURE":
                 return [

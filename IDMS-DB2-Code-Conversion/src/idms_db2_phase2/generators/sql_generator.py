@@ -20,9 +20,14 @@ class SqlGenerator:
       and group names.
     - TableNameResolver resolves TB/TV mismatches using DCLGEN.
 
-    Rules:
-    - SELECT by key is minimal and key-based.
+    Feedback-driven rules:
+    - OBTAIN CALC SELECT is not required for update flow.
+    - Direct UPDATE is enough when UPDATE WHERE has proper key columns.
+    - Composite key means all PK / CALC key columns must be used in WHERE.
+    - FK / FOREIGN / relationship columns must never be used in WHERE.
     - UPDATE is conservative/manual-style, not broad all-column update.
+    - DATE-YMD8 style values must be converted to DD.MM.CCYY before moving
+      into DB2 DA_/DT_ date host fields.
     - COMMIT and ROLLBACK are retained because IDMS FINISH/COMMIT conversion
       depends on these methods.
     """
@@ -39,6 +44,11 @@ class SqlGenerator:
         "NR_",
         "NS_",
         "CO_",
+    )
+
+    DATE_COLUMN_PREFIXES = (
+        "DA_",
+        "DT_",
     )
 
     def __init__(
@@ -67,92 +77,23 @@ class SqlGenerator:
         record_name: str,
     ) -> list[str]:
         """
-        Generate a minimal SELECT by key.
+        Convert OBTAIN CALC for update flow.
 
-        This preserves OBTAIN CALC conversion behavior while avoiding
-        broad full-row SELECT generation.
+        Feedback rule:
+        - SELECT before UPDATE is not required.
+        - Direct UPDATE using composite-key WHERE is enough.
+        - We still remove the original IDMS executable statement safely by
+          generating a DB2 comment and CONTINUE.
         """
         self.messages = []
 
         record = NameNormalizer.normalize(record_name)
-        table = self._resolved_table_for_record(record)
 
-        if not record or not table:
-            return self._missing_sql(
-                operation="SELECT",
-                record_name=record_name,
-                reason="missing Sheet Mapping or DCLGEN table metadata",
-            )
-
-        key_columns = self._key_columns_for_record(
-            record_name=record,
-            table_name=table,
-        )
-
-        if not key_columns:
-            return self._missing_sql(
-                operation="SELECT",
-                record_name=record,
-                reason="missing key column metadata",
-            )
-
-        select_columns = self._minimal_select_columns(
-            record_name=record,
-            table_name=table,
-            key_columns=key_columns,
-        )
-
-        if not select_columns:
-            return self._missing_sql(
-                operation="SELECT",
-                record_name=record,
-                reason="missing selectable DCLGEN host variables",
-            )
-
-        host_variables = self.host_variable_resolver.host_references_for_columns(
-            table_name=table,
-            columns=select_columns,
-        )
-
-        if not host_variables:
-            return self._missing_sql(
-                operation="SELECT",
-                record_name=record,
-                reason="missing SELECT host variables in DCLGEN",
-            )
-
-        where_lines = self._where_lines(
-            table_name=table,
-            key_columns=key_columns,
-            indent="    ",
-        )
-
-        if not where_lines:
-            return self._missing_sql(
-                operation="SELECT",
-                record_name=record,
-                reason="missing WHERE host variables in DCLGEN",
-            )
-
-        lines: list[str] = [
-            f"*DB2: Converted OBTAIN CALC for {NameNormalizer.to_cobol(record)}.",
-            f"MOVE 'SELECT-{NameNormalizer.to_cobol(record)}' TO SQL-LOCATION.",
-            "EXEC SQL",
-            "   SELECT",
+        return [
+            f"*DB2: Removed OBTAIN CALC SELECT for {NameNormalizer.to_cobol(record)}.",
+            "*DB2: Direct UPDATE will use mapped composite key WHERE clause.",
+            "CONTINUE.",
         ]
-
-        lines.extend(self._sql_column_list(select_columns, indent="      "))
-        lines.append("   INTO")
-        lines.extend(self._host_variable_list(host_variables, indent="      "))
-        lines.append(f"   FROM {table}")
-        lines.append("   WHERE")
-        lines.extend(where_lines)
-        lines.append("END-EXEC.")
-        lines.append("IF SQLCODE NOT = 0 AND SQLCODE NOT = 100")
-        lines.append("   PERFORM SQLERROR")
-        lines.append("END-IF.")
-
-        return lines
 
     def insert(
         self,
@@ -236,10 +177,11 @@ class SqlGenerator:
         """
         Generate conservative/manual-style UPDATE.
 
-        Fixes broad all-column UPDATE generation:
+        Feedback fixes:
         - Updates only changed fields resolved through Sheet Mapping.
         - Adds update audit fields only if present in Sheet Mapping and DCLGEN.
-        - Uses key columns only for WHERE.
+        - Uses all composite PK / CALC key fields in WHERE.
+        - Never uses FK / FOREIGN / relationship fields in WHERE.
         """
         self.messages = []
 
@@ -250,6 +192,12 @@ class SqlGenerator:
         )
 
         self.messages.extend(plan.diagnostics)
+
+        if plan.table_name:
+            plan.key_columns = self._key_columns_for_record(
+                record_name=record,
+                table_name=plan.table_name,
+            )
 
         if not plan.is_complete:
             return self._missing_sql(
@@ -305,6 +253,10 @@ class SqlGenerator:
     ) -> list[str]:
         """
         Generate DELETE for ERASE conversion.
+
+        Uses the same composite-key-only WHERE rule:
+        - Include all PK / CALC key fields.
+        - Exclude FK / FOREIGN / relationship fields.
         """
         self.messages = []
 
@@ -397,12 +349,13 @@ class SqlGenerator:
         """
         Generate a MOVE to a resolved DCLGEN host field.
 
-        Example:
-        MOVE DATE-YMD8 TO old-IDMS-field
+        Feedback fix:
+        - If target DB2 column is a date column, do not move DATE-YMD8 directly.
+        - Convert CCYYMMDD to DD.MM.CCYY before moving to DB2 date host field.
 
-        The old IDMS field is resolved through:
-        - Sheet Mapping
-        - DCLGEN host variable metadata
+        Example:
+        - DATE-YMD8 contains 20260820
+        - DB2 host receives 20.08.2026
         """
         record = NameNormalizer.normalize(record_name)
         table = self._resolved_table_for_record(record)
@@ -410,6 +363,7 @@ class SqlGenerator:
             record_name=record,
             source_field_name=target_source_field,
         )
+        column = NameNormalizer.normalize(column)
 
         if not table or not column:
             return [
@@ -429,6 +383,12 @@ class SqlGenerator:
                 "*DB2: Missing DCLGEN host variable.",
                 "CONTINUE.",
             ]
+
+        if self._is_db2_date_column(column):
+            return self._date_ymd8_to_db2_external_move(
+                source_value=source_value,
+                host_key=host_key,
+            )
 
         return [
             f"MOVE {source_value} TO {host_key}",
@@ -464,19 +424,97 @@ class SqlGenerator:
         record_name: str,
         table_name: str,
     ) -> list[str]:
-        columns = self.mapping_repository.key_columns_for_record(record_name)
-        columns = self._filter_to_existing_dclgen_columns(table_name, columns)
+        """
+        Return key columns for SQL WHERE clauses.
 
-        if columns:
-            return columns
+        Feedback rule:
+        - If key is composite, all PK / CALC key columns are required.
+        - FK / FOREIGN / relationship columns must never be included.
+        - Preserve Sheet Mapping order.
+        - Do not use broad fallback prefix columns.
+        """
+        columns: list[str] = []
 
-        fallback_columns = [
-            column
-            for column in self.mapping_repository.db2_columns_for_table(table_name)
-            if column.startswith(self.FALLBACK_KEY_PREFIXES)
-        ]
+        if hasattr(self.mapping_repository, "rows_for_record"):
+            columns = self._key_columns_from_mapping_rows(record_name)
 
-        return self._filter_to_existing_dclgen_columns(table_name, fallback_columns)
+        if not columns and hasattr(
+            self.mapping_repository,
+            "primary_key_columns_for_record",
+        ):
+            columns = self.mapping_repository.primary_key_columns_for_record(record_name)
+
+        return self._filter_to_existing_dclgen_columns(
+            table_name=table_name,
+            columns=columns,
+        )
+
+    def _key_columns_from_mapping_rows(
+        self,
+        record_name: str,
+    ) -> list[str]:
+        """
+        Read Sheet Mapping rows directly to avoid old repository behavior that
+        may return only one primary key or may include FK fields.
+
+        Include:
+        - DB2 PRIMARY / PRIMARY KEY / KEY
+        - IDMS CALC / KEY metadata
+
+        Exclude:
+        - DB2 FOREIGN KEY
+        - relation FOREIGN
+        - FK markers
+        """
+        output: list[str] = []
+        seen: set[str] = set()
+
+        for row in self.mapping_repository.rows_for_record(record_name):
+            idms_key = NameNormalizer.normalize(getattr(row, "idms_key", ""))
+            db2_key = NameNormalizer.normalize(getattr(row, "db2_key", ""))
+            relation = NameNormalizer.normalize(getattr(row, "relation", ""))
+
+            column = NameNormalizer.normalize(
+                getattr(row, "new_db2_field_name", "")
+                or getattr(row, "cross_application_db2_field_name", "")
+            )
+
+            if not column:
+                continue
+
+            combined_text = " ".join(
+                [
+                    idms_key,
+                    db2_key,
+                    relation,
+                ]
+            )
+            padded_text = f" {combined_text} "
+
+            if "FOREIGN" in combined_text:
+                continue
+
+            if " FK " in padded_text:
+                continue
+
+            is_key_column = (
+                "PRIMARY" in db2_key
+                or db2_key == "KEY"
+                or "PRIMARY" in idms_key
+                or idms_key == "KEY"
+                or "CALC" in idms_key
+            )
+
+            if not is_key_column:
+                continue
+
+            if column in seen:
+                continue
+
+            seen.add(column)
+            output.append(column)
+
+        return output
 
     def _minimal_select_columns(
         self,
@@ -485,19 +523,14 @@ class SqlGenerator:
         key_columns: list[str],
     ) -> list[str]:
         """
-        Minimal SELECT for OBTAIN CALC.
+        Minimal SELECT fallback.
 
-        Keep SELECT key-only so SQLCODE 0/100 behavior remains available
-        without fetching the entire row.
+        SELECT is no longer required for update flow, but if any older caller
+        still invokes this path, keep it key-only and FK-free.
         """
-        columns = self._filter_to_existing_dclgen_columns(table_name, key_columns)
-
-        if columns:
-            return columns
-
         return self._filter_to_existing_dclgen_columns(
             table_name=table_name,
-            columns=self.mapping_repository.key_columns_for_record(record_name),
+            columns=key_columns,
         )
 
     def _insert_columns_for_record(
@@ -538,6 +571,7 @@ class SqlGenerator:
 
             if not normalized:
                 continue
+
             if normalized not in dclgen_columns:
                 continue
 
@@ -551,18 +585,29 @@ class SqlGenerator:
         columns: list[str],
         indent: str,
     ) -> list[str]:
-        output: list[str] = []
+        assignments: list[tuple[str, str]] = []
 
-        for index, column in enumerate(columns):
+        for column in columns:
+            normalized = NameNormalizer.normalize(column)
+
+            if not normalized:
+                continue
+
             host = self.host_variable_resolver.host_reference_for_column(
                 table_name=table_name,
-                column_name=column,
+                column_name=normalized,
             )
 
             if not host:
                 continue
 
-            suffix = "," if index < len(columns) - 1 else ""
+            assignments.append((normalized, host))
+
+        output: list[str] = []
+
+        for index, item in enumerate(assignments):
+            column, host = item
+            suffix = "," if index < len(assignments) - 1 else ""
             output.append(f"{indent}{column} = {host}{suffix}")
 
         return output
@@ -573,17 +618,34 @@ class SqlGenerator:
         key_columns: list[str],
         indent: str,
     ) -> list[str]:
-        output: list[str] = []
+        """
+        Build SQL WHERE lines from composite key columns.
 
-        for index, column in enumerate(key_columns):
+        The caller must pass only PK / CALC key columns.
+        FK exclusion is handled in _key_columns_for_record().
+        """
+        conditions: list[tuple[str, str]] = []
+
+        for column in key_columns:
+            normalized = NameNormalizer.normalize(column)
+
+            if not normalized:
+                continue
+
             host = self.host_variable_resolver.host_reference_for_column(
                 table_name=table_name,
-                column_name=column,
+                column_name=normalized,
             )
 
             if not host:
                 continue
 
+            conditions.append((normalized, host))
+
+        output: list[str] = []
+
+        for index, item in enumerate(conditions):
+            column, host = item
             prefix = "" if index == 0 else "AND "
             output.append(f"{indent}{prefix}{column} = {host}")
 
@@ -640,6 +702,50 @@ class SqlGenerator:
             for prefix in INSERT_EXCLUDE_AUDIT_PREFIXES
         )
 
+    def _is_db2_date_column(
+        self,
+        column_name: str,
+    ) -> bool:
+        column = NameNormalizer.normalize(column_name)
+
+        return any(
+            column.startswith(prefix)
+            for prefix in self.DATE_COLUMN_PREFIXES
+        )
+
+    def _date_ymd8_to_db2_external_move(
+        self,
+        source_value: str,
+        host_key: str,
+    ) -> list[str]:
+        """
+        Convert CCYYMMDD into DB2 external date format DD.MM.CCYY.
+
+        Manual-style conversion:
+        - Move source CCYYMMDD into DA-CCYYMMDD.
+        - Redefined field DA-CCYYMMDD-R exposes CCYY, MM, DD.
+        - MOVE CORR transfers CCYY/MM/DD into DA-DD-MM-CCYY.
+        - Move DA-DD-MM-CCYY into the DB2 date host field.
+
+        Example:
+        - DATE-YMD8 = 20260820
+        - DA-DD-MM-CCYY = 20.08.2026
+        """
+        source = str(source_value or "").strip()
+
+        if not source:
+            return [
+                "MOVE SPACES TO DA-DD-MM-CCYY",
+                f"MOVE DA-DD-MM-CCYY TO {host_key}",
+            ]
+
+        return [
+            "MOVE ZEROES TO DA-CCYYMMDD",
+            f"MOVE {source} TO DA-CCYYMMDD",
+            "MOVE CORR DA-CCYYMMDD-R TO DA-DD-MM-CCYY",
+            f"MOVE DA-DD-MM-CCYY TO {host_key}",
+        ]
+
     def _unique(
         self,
         values: list[str],
@@ -652,6 +758,7 @@ class SqlGenerator:
 
             if not normalized:
                 continue
+
             if normalized in seen:
                 continue
 

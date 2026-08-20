@@ -16,9 +16,7 @@ class UpdateSqlPlan:
     diagnostics: list[str] = field(default_factory=list)
 
     @property
-    def is_complete(
-        self,
-    ) -> bool:
+    def is_complete(self) -> bool:
         return bool(
             self.record_name
             and self.table_name
@@ -34,7 +32,9 @@ class UpdateSqlPlanResolver:
     Generic rules:
     - Sheet Mapping decides DB2 table and column names.
     - DCLGEN decides whether host variables exist.
-    - CALC/PRIMARY KEY metadata decides WHERE columns.
+    - DB2 PRIMARY KEY metadata decides WHERE columns.
+    - Composite primary keys are supported by returning all PK columns.
+    - FOREIGN KEY / relationship columns must not be included in WHERE.
     - UPDATE columns come only from changed source fields and update audit fields.
     """
 
@@ -67,13 +67,13 @@ class UpdateSqlPlanResolver:
 
         if not resolved_table:
             plan.diagnostics.append(
-                f"Update SQL plan: DB2 table could not be resolved for record {record}."
+                f"Update SQL plan: no resolved DB2 table for record {record}."
             )
             return plan
 
         plan.table_name = resolved_table
 
-        key_columns = self.mapping_repository.key_columns_for_record(record)
+        key_columns = self._primary_key_columns_for_record(record)
         key_columns = self._filter_to_dclgen_columns(
             table_name=resolved_table,
             columns=key_columns,
@@ -81,7 +81,7 @@ class UpdateSqlPlanResolver:
 
         if not key_columns:
             plan.diagnostics.append(
-                f"Update SQL plan: no valid key columns resolved for record {record}."
+                f"Update SQL plan: no valid primary key columns resolved for record {record}."
             )
 
         update_columns = self.mapping_repository.update_candidate_columns_for_record(
@@ -103,6 +103,27 @@ class UpdateSqlPlanResolver:
 
         return plan
 
+    def _primary_key_columns_for_record(
+        self,
+        record_name: str,
+    ) -> list[str]:
+        """
+        Return DB2 primary-key columns only.
+
+        This intentionally does not use key_columns_for_record(), because that
+        method can include broader IDMS CALC/key metadata.
+
+        WHERE clause rule:
+        - Include PRIMARY / KEY columns.
+        - Exclude FOREIGN KEY columns.
+        - Exclude relationship columns.
+        - If multiple PK columns exist, keep all of them for composite PK WHERE.
+        """
+        if not hasattr(self.mapping_repository, "primary_key_columns_for_record"):
+            return []
+
+        return self.mapping_repository.primary_key_columns_for_record(record_name)
+
     def _filter_to_dclgen_columns(
         self,
         table_name: str,
@@ -122,8 +143,10 @@ class UpdateSqlPlanResolver:
 
             if not normalized:
                 continue
+
             if normalized not in dclgen_columns:
                 continue
+
             if not self.host_variable_resolver.has_host_for_column(
                 table_name=table_name,
                 column_name=normalized,
@@ -146,6 +169,7 @@ class UpdateSqlPlanResolver:
 
             if not normalized:
                 continue
+
             if normalized in seen:
                 continue
 
